@@ -1,0 +1,20 @@
+{
+  "@@locale": "en",
+  "appTitle": "Biodiversity Viewer",
+  "menuTitle": "Menu",
+  "myAccount": "My Account",
+  "language": "Language / Idioma",
+  "notifications": "Notifications",
+  "visualMode": "Visual Mode",
+  "helpCenter": "Help Center",
+  "logout": "Exit App",
+  "mapLayers": "MAP LAYERS",
+  "layerBase": "Base",
+  "layerYears": "Years",
+  "layerSatellite": "Satellite",
+  "layerDark": "Dark",
+  "fauna": "Fauna",
+  "flora": "Flora",
+  "date": "Date",
+  "analysis": "Analysis"
+}

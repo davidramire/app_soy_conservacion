@@ -1,0 +1,20 @@
+{
+  "@@locale": "es",
+  "appTitle": "Visor de Biodiversidad",
+  "menuTitle": "Menú",
+  "myAccount": "Mi Cuenta",
+  "language": "Idioma / Language",
+  "notifications": "Notificaciones",
+  "visualMode": "Modo Visual",
+  "helpCenter": "Centro de Ayuda",
+  "logout": "Salir de la App",
+  "mapLayers": "CAPAS DE MAPA",
+  "layerBase": "Base",
+  "layerYears": "Años",
+  "layerSatellite": "Satélite",
+  "layerDark": "Oscuro",
+  "fauna": "Fauna",
+  "flora": "Flora",
+  "date": "Fecha",
+  "analysis": "Análisis"
+}
