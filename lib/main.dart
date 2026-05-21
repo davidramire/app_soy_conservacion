@@ -4,6 +4,26 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:provider/provider.dart';
+
+import 'config/app_config.dart';
+import 'core/network/api_client.dart';
+import 'core/storage/local_cache_service.dart';
+import 'core/storage/secure_token_storage.dart';
+import 'providers/backend_status_provider.dart';
+import 'providers/map_provider.dart';
+import 'providers/observations_provider.dart';
+import 'providers/species_provider.dart';
+import 'repositories/auth_repository.dart';
+import 'repositories/map_repository.dart';
+import 'repositories/observations_repository.dart';
+import 'repositories/species_repository.dart';
+import 'repositories/users_repository.dart';
+import 'services/auth_service.dart';
+import 'services/map_service.dart';
+import 'services/observations_service.dart';
+import 'services/species_service.dart';
+import 'services/users_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -84,13 +104,89 @@ class MiApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.light,
-        fontFamily: 'Poppins',
+    final appConfig = AppConfig.fromEnvironment();
+
+    return MultiProvider(
+      providers: [
+        Provider<AppConfig>.value(value: appConfig),
+        Provider<SecureTokenStorage>(create: (_) => const SecureTokenStorage()),
+        Provider<LocalCacheService>(create: (_) => const LocalCacheService()),
+        Provider<ApiClient>(
+          create: (context) => ApiClient(
+            config: context.read<AppConfig>(),
+            tokenStorage: context.read<SecureTokenStorage>(),
+          ),
+        ),
+        Provider<SpeciesService>(
+          create: (context) => SpeciesService(apiClient: context.read<ApiClient>()),
+        ),
+        Provider<ObservationsService>(
+          create: (context) => ObservationsService(apiClient: context.read<ApiClient>()),
+        ),
+        Provider<MapService>(
+          create: (context) => MapService(apiClient: context.read<ApiClient>()),
+        ),
+        Provider<UsersService>(
+          create: (context) => UsersService(apiClient: context.read<ApiClient>()),
+        ),
+        Provider<AuthService>(
+          create: (context) => AuthService(
+            apiClient: context.read<ApiClient>(),
+            tokenStorage: context.read<SecureTokenStorage>(),
+          ),
+        ),
+        Provider<SpeciesRepository>(
+          create: (context) => SpeciesRepository(
+            service: context.read<SpeciesService>(),
+            cacheService: context.read<LocalCacheService>(),
+          ),
+        ),
+        Provider<ObservationsRepository>(
+          create: (context) => ObservationsRepository(
+            service: context.read<ObservationsService>(),
+            cacheService: context.read<LocalCacheService>(),
+          ),
+        ),
+        Provider<MapRepository>(
+          create: (context) => MapRepository(
+            service: context.read<MapService>(),
+            observationsRepository: context.read<ObservationsRepository>(),
+            cacheService: context.read<LocalCacheService>(),
+          ),
+        ),
+        Provider<UsersRepository>(
+          create: (context) => UsersRepository(service: context.read<UsersService>()),
+        ),
+        Provider<AuthRepository>(
+          create: (context) => AuthRepository(
+            service: context.read<AuthService>(),
+            tokenStorage: context.read<SecureTokenStorage>(),
+          ),
+        ),
+        ChangeNotifierProvider<SpeciesProvider>(
+          create: (context) => SpeciesProvider(repository: context.read<SpeciesRepository>()),
+        ),
+        ChangeNotifierProvider<ObservationsProvider>(
+          create: (context) => ObservationsProvider(repository: context.read<ObservationsRepository>()),
+        ),
+        ChangeNotifierProvider<MapProvider>(
+          create: (context) => MapProvider(repository: context.read<MapRepository>()),
+        ),
+        ChangeNotifierProvider<BackendStatusProvider>(
+          create: (context) => BackendStatusProvider(
+            apiClient: context.read<ApiClient>(),
+            config: context.read<AppConfig>(),
+          ),
+        ),
+      ],
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          brightness: Brightness.light,
+          fontFamily: 'Poppins',
+        ),
+        home: const SplashScreen(),
       ),
-      home: const SplashScreen(),
     );
   }
 }
@@ -167,6 +263,17 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
       duration: const Duration(milliseconds: 1000), // Un segundo completo para máxima suavidad
       reverseDuration: const Duration(milliseconds: 800), 
     );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+
+      context.read<BackendStatusProvider>().checkBackend();
+      context.read<SpeciesProvider>().loadSpecies();
+      context.read<ObservationsProvider>().loadObservations();
+      context.read<MapProvider>().loadSnapshot();
+    });
   }
 
   @override
@@ -206,7 +313,7 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: _isDarkMode ? Colors.white.withOpacity(0.25) : Colors.transparent,
+                  color: _isDarkMode ? Colors.white.withValues(alpha: 0.25) : Colors.transparent,
                   borderRadius: BorderRadius.circular(12),
 
                 ),
@@ -289,9 +396,8 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
             ).value;
             
             return Transform(
-              transform: Matrix4.identity()
+              transform: Matrix4.translationValues((1 - curvedValue) * 120, 0, 0)
                 ..setEntry(3, 2, 0.0008) // Perspectiva 3D más sutil
-                ..translate((1 - curvedValue) * 120) // Un recorrido de entrada más largo para que se sienta el deslizamiento
                 ..rotateY((1 - curvedValue) * 0.05), // Rotación apenas perceptible
               alignment: Alignment.centerRight,
               child: Opacity(
@@ -311,7 +417,8 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
                       child: Builder(
                         builder: (menuContext) => Column(
                           children: [
-                            // ... resto del código interno
+                            _buildBackendSummaryCard(),
+                            const SizedBox(height: 8),
                             Padding(
                               padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
                               child: Row(
@@ -384,7 +491,6 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
                                     title: _t('visualMode'),
                                     isDark: _isDarkMode,
                                     trailing: Switch.adaptive(
-                                      activeColor: Colors.blueAccent,
                                       value: _isDarkMode,
                                       onChanged: (value) {
                                         setState(() {
@@ -433,7 +539,7 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    _t('version') + ' 1.0.0',
+                                    '${_t('version')} 1.0.0',
                                     style: TextStyle(
                                       fontSize: 9,
                                       color: _isDarkMode ? Colors.white24 : Colors.black26,
@@ -452,33 +558,46 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
             );
           },
         ),
-        body: FlutterMap(
-          options: MapOptions(
-            initialCenter: const LatLng(4.5709, -74.2973),
-            initialZoom: 4.0,
-            minZoom: 3.0,
-            maxZoom: 18.0,
-            initialRotation: 0.0, // Asegura que el mapa inicie perfectamente recto
-            // Bloquea cualquier rotación para mantener la verticalidad absoluta
-            interactionOptions: const InteractionOptions(
-              flags: InteractiveFlag.drag | InteractiveFlag.pinchZoom | InteractiveFlag.doubleTapZoom,
-            ),
-            // Limitar el movimiento a las Américas (aproximadamente)
-            cameraConstraint: CameraConstraint.contain(
-              bounds: LatLngBounds(
-                const LatLng(-56.0, -110.0), // Sur de Chile/Argentina
-                const LatLng(50.0, -30.0),   // Límite norte antes de entrar de lleno a USA y este en el Atlántico
-              ),
-            ),
-          ),
+        body: Stack(
           children: [
-            TileLayer(
-              urlTemplate: "https://api.mapbox.com/styles/v1/mapbox/{styleId}/tiles/{z}/{x}/{y}@2x?access_token={accessToken}",
-              additionalOptions: {
-                'styleId': _mapStyle,
-                'accessToken': dotenv.get('MAPBOX_ACCESS_TOKEN'),
-              },
-              userAgentPackageName: 'com.example.app',
+            FlutterMap(
+              options: MapOptions(
+                initialCenter: const LatLng(4.5709, -74.2973),
+                initialZoom: 4.0,
+                minZoom: 3.0,
+                maxZoom: 18.0,
+                initialRotation: 0.0, // Asegura que el mapa inicie perfectamente recto
+                // Bloquea cualquier rotación para mantener la verticalidad absoluta
+                interactionOptions: const InteractionOptions(
+                  flags: InteractiveFlag.drag | InteractiveFlag.pinchZoom | InteractiveFlag.doubleTapZoom,
+                ),
+                // Limitar el movimiento a las Américas (aproximadamente)
+                cameraConstraint: CameraConstraint.contain(
+                  bounds: LatLngBounds(
+                    const LatLng(-56.0, -110.0), // Sur de Chile/Argentina
+                    const LatLng(50.0, -30.0),   // Límite norte antes de entrar de lleno a USA y este en el Atlántico
+                  ),
+                ),
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: "https://api.mapbox.com/styles/v1/mapbox/{styleId}/tiles/{z}/{x}/{y}@2x?access_token={accessToken}",
+                  additionalOptions: {
+                    'styleId': _mapStyle,
+                    'accessToken': dotenv.get('MAPBOX_ACCESS_TOKEN'),
+                  },
+                  userAgentPackageName: 'com.example.app',
+                ),
+              ],
+            ),
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 16,
+              left: 16,
+              right: 16,
+              child: SafeArea(
+                bottom: false,
+                child: _buildBackendSummaryCard(compact: true),
+              ),
             ),
           ],
         ),
@@ -486,7 +605,7 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
           decoration: BoxDecoration(
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.05),
+                color: Colors.black.withValues(alpha: 0.05),
                 blurRadius: 10,
                 offset: const Offset(0, -5),
               ),
@@ -563,9 +682,9 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: isSelected
-                  ? Colors.blueAccent.withOpacity(0.15)
-                  : (_isDarkMode ? Colors.white.withOpacity(0.05) : const Color(0xFFF0F2F5)),
+                color: isSelected
+                  ? Colors.blueAccent.withValues(alpha: 0.15)
+                  : (_isDarkMode ? Colors.white.withValues(alpha: 0.05) : const Color(0xFFF0F2F5)),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
                 color: isSelected ? Colors.blueAccent : Colors.transparent,
@@ -617,6 +736,181 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
       ),
       trailing: trailing,
       onTap: onTap,
+    );
+  }
+
+  Widget _buildBackendSummaryCard({bool compact = false}) {
+    return Consumer4<BackendStatusProvider, SpeciesProvider, ObservationsProvider, MapProvider>(
+      builder: (context, backendStatus, speciesProvider, observationsProvider, mapProvider, child) {
+        final backgroundColor = _isDarkMode ? Colors.black.withValues(alpha: 0.75) : Colors.white.withValues(alpha: 0.92);
+        final borderColor = backendStatus.state == BackendConnectionState.online
+            ? Colors.greenAccent.withValues(alpha: 0.45)
+            : backendStatus.state == BackendConnectionState.degraded
+              ? Colors.orangeAccent.withValues(alpha: 0.45)
+              : Colors.blueAccent.withValues(alpha: 0.25);
+
+        final card = Container(
+          padding: EdgeInsets.all(compact ? 14 : 16),
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: borderColor, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: backendStatus.state == BackendConnectionState.online
+                          ? Colors.green
+                          : backendStatus.state == BackendConnectionState.degraded
+                              ? Colors.orange
+                              : backendStatus.state == BackendConnectionState.checking
+                                  ? Colors.blue
+                                  : Colors.redAccent,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Backend ${backendStatus.environmentLabel}',
+                      style: TextStyle(
+                        fontSize: compact ? 12 : 13,
+                        fontWeight: FontWeight.w700,
+                        color: _isDarkMode ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    icon: backendStatus.isBusy
+                        ? SizedBox(
+                            width: compact ? 16 : 18,
+                            height: compact ? 16 : 18,
+                            child: const CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            LucideIcons.refreshCw,
+                            size: compact ? 16 : 18,
+                            color: _isDarkMode ? Colors.white70 : Colors.black54,
+                          ),
+                    onPressed: backendStatus.isBusy
+                        ? null
+                        : () {
+                            context.read<BackendStatusProvider>().checkBackend();
+                            context.read<SpeciesProvider>().refresh();
+                            context.read<ObservationsProvider>().refresh();
+                            context.read<MapProvider>().refresh();
+                          },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                backendStatus.baseUri.toString(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: compact ? 11 : 12,
+                  color: _isDarkMode ? Colors.white70 : Colors.black54,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildMiniStat('Species', speciesProvider.items.length.toString()),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _buildMiniStat('Obs.', observationsProvider.items.length.toString()),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _buildMiniStat('Map', (mapProvider.snapshot?.markers.length ?? 0).toString()),
+                  ),
+                ],
+              ),
+              if (!compact) ...[
+                const SizedBox(height: 10),
+                Text(
+                  backendStatus.message ?? 'Sin comprobación reciente',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: _isDarkMode ? Colors.white54 : Colors.black54,
+                  ),
+                ),
+              ],
+              if (speciesProvider.errorMessage != null || observationsProvider.errorMessage != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  speciesProvider.errorMessage ?? observationsProvider.errorMessage ?? '',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Colors.redAccent,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+
+        if (compact) {
+          return card;
+        }
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: card,
+        );
+      },
+    );
+  }
+
+  Widget _buildMiniStat(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: _isDarkMode ? Colors.white.withValues(alpha: 0.05) : const Color(0xFFF5F7FA),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: _isDarkMode ? Colors.white : Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              color: _isDarkMode ? Colors.white54 : Colors.black54,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
