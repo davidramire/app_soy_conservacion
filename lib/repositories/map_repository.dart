@@ -34,6 +34,10 @@ class MapRepository {
                 'title': marker.title,
                 'subtitle': marker.subtitle,
                 'imageUrl': marker.imageUrl,
+                'sourceUrl': marker.sourceUrl,
+                'sourceType': marker.sourceType,
+                'groupName': marker.groupName,
+                'speciesId': marker.speciesId,
               },
             )
             .toList(),
@@ -47,7 +51,9 @@ class MapRepository {
       });
       return snapshot;
     } catch (_) {
-      final observations = await observationsRepository.loadObservations(refresh: refresh);
+      final observations = await observationsRepository.loadObservations(
+        refresh: refresh,
+      );
       final derivedSnapshot = MapSnapshot.fromObservations(observations);
       await cacheService.saveJson(_cacheKey, {
         'markers': derivedSnapshot.markers
@@ -59,6 +65,10 @@ class MapRepository {
                 'title': marker.title,
                 'subtitle': marker.subtitle,
                 'imageUrl': marker.imageUrl,
+                'sourceUrl': marker.sourceUrl,
+                'sourceType': marker.sourceType,
+                'groupName': marker.groupName,
+                'speciesId': marker.speciesId,
               },
             )
             .toList(),

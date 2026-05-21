@@ -9,6 +9,10 @@ class MapMarkerData {
     required this.title,
     this.subtitle,
     this.imageUrl,
+    this.sourceUrl,
+    this.sourceType,
+    this.groupName,
+    this.speciesId,
   });
 
   final String id;
@@ -16,6 +20,18 @@ class MapMarkerData {
   final String title;
   final String? subtitle;
   final String? imageUrl;
+  final String? sourceUrl;
+  final String? sourceType;
+  final String? groupName;
+  final String? speciesId;
+
+  String get resolvedSourceType {
+    final normalized = sourceType?.toLowerCase() ?? sourceUrl?.toLowerCase() ?? '';
+    if (normalized.contains('inaturalist')) {
+      return 'inaturalist';
+    }
+    return 'odk';
+  }
 
   factory MapMarkerData.fromObservation(Observation observation) {
     return MapMarkerData(
@@ -24,16 +40,14 @@ class MapMarkerData {
       title: observation.speciesName ?? 'Observación',
       subtitle: observation.observerName,
       imageUrl: observation.imageUrl,
+      sourceUrl: observation.sourceUrl,
+      sourceType: 'odk',
     );
   }
 }
 
 class MapSnapshot {
-  const MapSnapshot({
-    required this.markers,
-    this.center,
-    this.zoom,
-  });
+  const MapSnapshot({required this.markers, this.center, this.zoom});
 
   final List<MapMarkerData> markers;
   final LatLng? center;
@@ -45,8 +59,14 @@ class MapSnapshot {
         .map(MapMarkerData.fromObservation)
         .toList();
 
-    final center = markers.isNotEmpty ? markers.first.position : const LatLng(4.5709, -74.2973);
-    return MapSnapshot(markers: markers, center: center, zoom: markers.isNotEmpty ? 5.0 : 4.0);
+    final center = markers.isNotEmpty
+        ? markers.first.position
+        : const LatLng(4.5709, -74.2973);
+    return MapSnapshot(
+      markers: markers,
+      center: center,
+      zoom: markers.isNotEmpty ? 5.0 : 4.0,
+    );
   }
 
   factory MapSnapshot.fromJson(dynamic payload) {
@@ -55,14 +75,30 @@ class MapSnapshot {
       if (items is List) {
         final markerItems = items.whereType<Map>().map((item) {
           final data = Map<String, dynamic>.from(item);
-          final lat = (data['latitude'] as num?)?.toDouble() ?? (data['lat'] as num?)?.toDouble() ?? 0;
-          final lng = (data['longitude'] as num?)?.toDouble() ?? (data['lng'] as num?)?.toDouble() ?? 0;
+          final lat =
+              (data['latitude'] as num?)?.toDouble() ??
+              (data['lat'] as num?)?.toDouble() ??
+              0;
+          final lng =
+              (data['longitude'] as num?)?.toDouble() ??
+              (data['lng'] as num?)?.toDouble() ??
+              0;
           return MapMarkerData(
             id: data['id']?.toString() ?? '',
             position: LatLng(lat, lng),
-            title: data['title']?.toString() ?? data['name']?.toString() ?? 'Punto de mapa',
-            subtitle: data['subtitle']?.toString() ?? data['description']?.toString(),
-            imageUrl: data['imageUrl']?.toString() ?? data['image_url']?.toString(),
+            title:
+                data['title']?.toString() ??
+                data['name']?.toString() ??
+                'Punto de mapa',
+            subtitle:
+                data['subtitle']?.toString() ?? data['description']?.toString(),
+            imageUrl:
+                data['imageUrl']?.toString() ?? data['image_url']?.toString(),
+            sourceUrl:
+                data['sourceUrl']?.toString() ?? data['source_url']?.toString(),
+            sourceType: data['sourceType']?.toString() ?? data['source_type']?.toString(),
+            groupName: data['groupName']?.toString() ?? data['group_name']?.toString(),
+            speciesId: data['speciesId']?.toString() ?? data['species_id']?.toString(),
           );
         }).toList();
 
@@ -70,8 +106,12 @@ class MapSnapshot {
         LatLng? center;
         if (centerPayload is Map) {
           final centerMap = Map<String, dynamic>.from(centerPayload);
-          final lat = (centerMap['latitude'] as num?)?.toDouble() ?? (centerMap['lat'] as num?)?.toDouble();
-          final lng = (centerMap['longitude'] as num?)?.toDouble() ?? (centerMap['lng'] as num?)?.toDouble();
+          final lat =
+              (centerMap['latitude'] as num?)?.toDouble() ??
+              (centerMap['lat'] as num?)?.toDouble();
+          final lng =
+              (centerMap['longitude'] as num?)?.toDouble() ??
+              (centerMap['lng'] as num?)?.toDouble();
           if (lat != null && lng != null) {
             center = LatLng(lat, lng);
           }
@@ -80,7 +120,11 @@ class MapSnapshot {
         final zoom = (payload['zoom'] as num?)?.toDouble();
         return MapSnapshot(
           markers: markerItems,
-          center: center ?? (markerItems.isNotEmpty ? markerItems.first.position : const LatLng(4.5709, -74.2973)),
+          center:
+              center ??
+              (markerItems.isNotEmpty
+                  ? markerItems.first.position
+                  : const LatLng(4.5709, -74.2973)),
           zoom: zoom,
         );
       }

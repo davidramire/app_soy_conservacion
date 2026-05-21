@@ -15,41 +15,82 @@ speciesRouter.get(
     const category = String(request.query.category ?? '').trim();
 
     const where = {
-      ...(kingdom ? { kingdom } : {}),
-      ...(category ? { category } : {}),
+      ...(kingdom || category
+        ? {
+            grupoTaxonomico: {
+              is: {
+                nombre: {
+                  contains: kingdom || category,
+                  mode: 'insensitive',
+                },
+              },
+            },
+          }
+        : {}),
       ...(search
         ? {
             OR: [
-              { commonName: { contains: search, mode: 'insensitive' } },
-              { scientificName: { contains: search, mode: 'insensitive' } },
-              { description: { contains: search, mode: 'insensitive' } },
+              { nombreCientifico: { contains: search, mode: 'insensitive' } },
+              {
+                grupoTaxonomico: {
+                  is: {
+                    nombre: { contains: search, mode: 'insensitive' },
+                  },
+                },
+              },
             ],
           }
         : {}),
     };
 
     const [items, total] = await prisma.$transaction([
-      prisma.species.findMany({
+      prisma.especie.findMany({
         where,
-        orderBy: { updatedAt: 'desc' },
+        orderBy: { nombreCientifico: 'asc' },
         skip,
         take: limit,
+        include: {
+          grupoTaxonomico: true,
+        },
       }),
-      prisma.species.count({ where }),
+      prisma.especie.count({ where }),
     ]);
 
-    response.json(buildPagedResponse(items, total, page, limit));
+    response.json(
+      buildPagedResponse(
+        items.map((item) => ({
+          id: item.idEspecie.toString(),
+          name: item.nombreCientifico,
+          scientificName: item.nombreCientifico,
+          kingdom: item.grupoTaxonomico?.nombre ?? null,
+          category: item.grupoTaxonomico?.nombre ?? null,
+          description: null,
+          imageUrl: null,
+          sourceUrl: null,
+          groupName: item.grupoTaxonomico?.nombre ?? null,
+        })),
+        total,
+        page,
+        limit,
+      ),
+    );
   }),
 );
 
 speciesRouter.get(
   '/:id',
   asyncHandler(async (request, response) => {
-    const species = await prisma.species.findUnique({
-      where: { id: request.params.id },
+    const id = Number(request.params.id);
+    const species = await prisma.especie.findUnique({
+      where: { idEspecie: Number.isNaN(id) ? -1 : id },
       include: {
-        observations: {
-          orderBy: { observedAt: 'desc' },
+        grupoTaxonomico: true,
+        observaciones: {
+          orderBy: { fecha: 'desc' },
+          take: 10,
+        },
+        observacionesInat: {
+          orderBy: { fecha: 'desc' },
           take: 10,
         },
       },
@@ -59,6 +100,22 @@ speciesRouter.get(
       return response.status(404).json({ message: 'Species not found' });
     }
 
-    response.json(species);
+    response.json({
+      id: species.idEspecie.toString(),
+      name: species.nombreCientifico,
+      scientificName: species.nombreCientifico,
+      kingdom: species.grupoTaxonomico?.nombre ?? null,
+      category: species.grupoTaxonomico?.nombre ?? null,
+      description: null,
+      imageUrl: null,
+      sourceUrl: null,
+      groupName: species.grupoTaxonomico?.nombre ?? null,
+      observations: [...species.observaciones, ...species.observacionesInat].map((item) => ({
+        id: item.idObservacion?.toString?.() ?? item.idInaturalistObservacion?.toString?.() ?? '',
+        observedAt: item.fecha,
+        latitude: item.latitud,
+        longitude: item.longitud,
+      })),
+    });
   }),
 );

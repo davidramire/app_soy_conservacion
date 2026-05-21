@@ -9,7 +9,7 @@ class ObservationsService {
 
   Future<ApiCollection<Observation>> fetchObservations({
     int page = 1,
-    int limit = 50,
+    int limit = 5000,
     String? query,
   }) async {
     final payload = await apiClient.getJson(

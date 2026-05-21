@@ -14,7 +14,7 @@ class SpeciesRepository {
   Future<List<Species>> loadSpecies({
     bool refresh = false,
     int page = 1,
-    int limit = 50,
+    int limit = 5000,
     String? query,
   }) async {
     final cacheKey = _cacheKey(page: page, limit: limit, query: query);
@@ -32,7 +32,7 @@ class SpeciesRepository {
 
   Future<List<Species>> loadCachedSpecies({
     int page = 1,
-    int limit = 50,
+    int limit = 5000,
     String? query,
   }) async {
     final cachedItems = await cacheService.readJsonList(_cacheKey(page: page, limit: limit, query: query));
