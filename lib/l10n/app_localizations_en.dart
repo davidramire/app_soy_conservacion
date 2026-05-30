@@ -39,7 +39,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get layerBase => 'Base';
 
   @override
-  String get layerYears => 'Years';
+  String get layerYears => 'Light';
 
   @override
   String get layerSatellite => 'Satellite';

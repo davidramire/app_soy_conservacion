@@ -1,5 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' as rendering;
+import 'package:flutter/foundation.dart';
 // import 'package:flutter_gen/gen_l10n/app_localizations.dart'; // Se activará tras el primer build
+import 'package:http/http.dart' as http;
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -29,6 +34,23 @@ import 'services/users_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Aseguramos que las ayudas de debug paint estén desactivadas en debug
+  assert(() {
+    rendering.debugPaintSizeEnabled = false;
+    rendering.debugPaintBaselinesEnabled = false;
+    rendering.debugPaintPointersEnabled = false;
+    return true;
+  }());
+  // Extra: for some environments, also set them when kDebugMode is true
+  if (kDebugMode) {
+    try {
+      rendering.debugPaintSizeEnabled = false;
+      rendering.debugPaintBaselinesEnabled = false;
+      rendering.debugPaintPointersEnabled = false;
+    } catch (_) {
+      // ignore: no-op in environments where these setters aren't available
+    }
+  }
   await dotenv.load(fileName: ".env.local");
   runApp(const MiApp());
 }
@@ -118,19 +140,16 @@ class MiApp extends StatelessWidget {
           ),
         ),
         Provider<SpeciesService>(
-          create: (context) =>
-              SpeciesService(apiClient: context.read<ApiClient>()),
+          create: (context) => SpeciesService(apiClient: context.read<ApiClient>()),
         ),
         Provider<ObservationsService>(
-          create: (context) =>
-              ObservationsService(apiClient: context.read<ApiClient>()),
+          create: (context) => ObservationsService(apiClient: context.read<ApiClient>()),
         ),
         Provider<MapService>(
           create: (context) => MapService(apiClient: context.read<ApiClient>()),
         ),
         Provider<UsersService>(
-          create: (context) =>
-              UsersService(apiClient: context.read<ApiClient>()),
+          create: (context) => UsersService(apiClient: context.read<ApiClient>()),
         ),
         Provider<AuthService>(
           create: (context) => AuthService(
@@ -158,8 +177,7 @@ class MiApp extends StatelessWidget {
           ),
         ),
         Provider<UsersRepository>(
-          create: (context) =>
-              UsersRepository(service: context.read<UsersService>()),
+          create: (context) => UsersRepository(service: context.read<UsersService>()),
         ),
         Provider<AuthRepository>(
           create: (context) => AuthRepository(
@@ -168,17 +186,13 @@ class MiApp extends StatelessWidget {
           ),
         ),
         ChangeNotifierProvider<SpeciesProvider>(
-          create: (context) =>
-              SpeciesProvider(repository: context.read<SpeciesRepository>()),
+          create: (context) => SpeciesProvider(repository: context.read<SpeciesRepository>()),
         ),
         ChangeNotifierProvider<ObservationsProvider>(
-          create: (context) => ObservationsProvider(
-            repository: context.read<ObservationsRepository>(),
-          ),
+          create: (context) => ObservationsProvider(repository: context.read<ObservationsRepository>()),
         ),
         ChangeNotifierProvider<MapProvider>(
-          create: (context) =>
-              MapProvider(repository: context.read<MapRepository>()),
+          create: (context) => MapProvider(repository: context.read<MapRepository>()),
         ),
         ChangeNotifierProvider<BackendStatusProvider>(
           create: (context) => BackendStatusProvider(
@@ -196,6 +210,7 @@ class MiApp extends StatelessWidget {
   }
 }
 
+
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
 
@@ -209,7 +224,9 @@ class _MainScreenState extends State<MainScreen>
   String _currentLanguage = 'es';
   String _mapStyle = 'outdoors-v12';
   String _taxonomyFocus = 'fauna';
-  String _selectedTaxonomyGroup = 'all';
+  String? _activeTaxonomyGroup;
+  final MapController _mapController = MapController();
+  final Map<String, Future<String?>> _placeNameFutureCache = {};
   late final AnimationController _menuController;
 
   final Map<String, Map<String, String>> _texts = {
@@ -223,8 +240,9 @@ class _MainScreenState extends State<MainScreen>
       'help': 'Centro de Ayuda',
       'logout': 'Salir de la App',
       'mapLayers': 'CAPAS DE MAPA',
+      'selectMapView': 'Selecciona una vista del mapa',
       'base': 'Base',
-      'years': 'Años',
+      'years': 'Claro',
       'satellite': 'Satélite',
       'dark': 'Oscuro',
       'footerName': 'SOY CONSERVACIÓN',
@@ -243,8 +261,9 @@ class _MainScreenState extends State<MainScreen>
       'help': 'Help Center',
       'logout': 'Exit App',
       'mapLayers': 'MAP LAYERS',
+      'selectMapView': 'Select a map view',
       'base': 'Base',
-      'years': 'Years',
+      'years': 'Light',
       'satellite': 'Satellite',
       'dark': 'Dark',
       'footerName': 'I AM CONSERVATION',
@@ -297,11 +316,11 @@ class _MainScreenState extends State<MainScreen>
     // Definimos los items aquí para asegurar que se recalculen con el estado actual de _currentLanguage
     final List<BottomNavigationBarItem> navItems = [
       BottomNavigationBarItem(
-        icon: const Icon(LucideIcons.cat),
+        icon: const Icon(Icons.pets),
         label: _t('fauna'),
       ),
       BottomNavigationBarItem(
-        icon: const Icon(LucideIcons.flower2),
+        icon: const Icon(Icons.eco),
         label: _t('flora'),
       ),
       BottomNavigationBarItem(
@@ -407,205 +426,278 @@ class _MainScreenState extends State<MainScreen>
       endDrawer: AnimatedBuilder(
         animation: _menuController,
         builder: (context, child) {
-          // Diseño de animación premium:
-          // Curves.easeOutQuart para una entrada que desliza con elegancia y sin rebotes bruscos.
           final curvedValue = CurvedAnimation(
             parent: _menuController,
-            curve: Curves.easeOutQuart,
-            reverseCurve: Curves.easeInQuart,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
           ).value;
 
           return Transform(
-            transform: Matrix4.translationValues((1 - curvedValue) * 120, 0, 0)
-              ..setEntry(3, 2, 0.0008) // Perspectiva 3D más sutil
-              ..rotateY(
-                (1 - curvedValue) * 0.05,
-              ), // Rotación apenas perceptible
+            transform: Matrix4.translationValues((1 - curvedValue) * 80, 0, 0)
+              ..setEntry(3, 2, 0.001)
+              ..rotateY((1 - curvedValue) * 0.02),
             alignment: Alignment.centerRight,
             child: Opacity(
               opacity: curvedValue.clamp(0.0, 1.0),
               child: Container(
-                width:
-                    MediaQuery.of(context).size.width *
-                    0.75, // Ligeramente más ancho para mejor balance visual
+                width: MediaQuery.of(context).size.width * 0.75,
                 margin: EdgeInsets.only(
-                  top: MediaQuery.of(context).padding.top + 10,
-                  bottom: MediaQuery.of(context).size.height * 0.1,
-                  right:
-                      4, // Antes estaba en 16, ahora lo pegamos más al borde derecho
+                  top: MediaQuery.of(context).padding.top + 20,
+                  bottom: MediaQuery.of(context).size.height * 0.16,
+                  right: 12,
                 ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(32),
-                  child: Drawer(
-                    elevation: 8,
-                    backgroundColor: _isDarkMode
-                        ? const Color(0xFF171717)
-                        : Colors.white,
-                    child: Builder(
-                      builder: (menuContext) => Column(
-                        children: [
-                          _buildBackendSummaryCard(),
-                          const SizedBox(height: 8),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: _isDarkMode ? 0.55 : 0.1),
+                      blurRadius: 40,
+                      spreadRadius: 0,
+                      offset: const Offset(-6, 0),
+                    ),
+                  ],
+                ),
+                child: Stack(
+                  children: [
+                    // Contenido del menú
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(24),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: _isDarkMode
+                              ? const Color(0xFF1C1C1E)
+                              : const Color(0xFFFAFAFA),
+                        ),
+                        child: Drawer(
+                          elevation: 0,
+                          backgroundColor: Colors.transparent,
+                          child: Builder(
+                            builder: (menuContext) => Column(
                               children: [
-                                Text(
-                                  _t('menu'),
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: _isDarkMode
-                                        ? Colors.white38
-                                        : Colors.black38,
-                                    letterSpacing: 1.2,
+                                // Header
+                                Container(
+                                  padding: const EdgeInsets.fromLTRB(24, 28, 16, 20),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        _t('menu'),
+                                        style: TextStyle(
+                                          fontSize: 26,
+                                          fontWeight: FontWeight.w700,
+                                          color: _isDarkMode
+                                              ? Colors.white
+                                              : const Color(0xFF1C1C1E),
+                                          letterSpacing: -0.3,
+                                        ),
+                                      ),
+                                      Container(
+                                        width: 36,
+                                        height: 36,
+                                        decoration: BoxDecoration(
+                                          color: _isDarkMode
+                                              ? Colors.white.withValues(alpha: 0.12)
+                                              : Colors.black.withValues(alpha: 0.06),
+                                          borderRadius: BorderRadius.circular(10),
+                                        ),
+                                        child: IconButton(
+                                          padding: EdgeInsets.zero,
+                                          icon: Icon(
+                                            LucideIcons.x,
+                                            size: 18,
+                                            color: _isDarkMode
+                                                ? Colors.white.withValues(alpha: 0.9)
+                                                : Colors.black.withValues(alpha: 0.75),
+                                          ),
+                                          onPressed: () {
+                                            Scaffold.of(menuContext).closeEndDrawer();
+                                          },
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                                IconButton(
-                                  constraints: const BoxConstraints(),
-                                  padding: const EdgeInsets.all(8),
-                                  icon: Icon(
-                                    LucideIcons.x,
-                                    size: 20,
-                                    color: _isDarkMode
-                                        ? Colors.white54
-                                        : Colors.black54,
-                                  ),
-                                  onPressed: () {
-                                    Scaffold.of(menuContext).closeEndDrawer();
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
 
-                          // --- Perfil del
-
-                          // --- Opciones principales ---
-                          Expanded(
-                            child: ListView(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                              ),
-                              children: [
-                                _buildMapLayerSection(),
-                                const Divider(
-                                  height: 32,
-                                  indent: 8,
-                                  endIndent: 8,
-                                ),
-                                const SizedBox(height: 4),
-                                _buildMenuItem(
-                                  icon: LucideIcons.languages,
-                                  title: _t('language'),
-                                  isDark: _isDarkMode,
-                                  trailing: Text(
-                                    _currentLanguage == 'es' ? 'ES' : 'EN',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: _isDarkMode
-                                          ? Colors.white54
-                                          : Colors.black54,
-                                    ),
-                                  ),
-                                  onTap: () {
-                                    setState(() {
-                                      _currentLanguage =
-                                          (_currentLanguage == 'es')
-                                          ? 'en'
-                                          : 'es';
-                                    });
-                                    debugPrint(
-                                      'BOTÓN PULSADO - Nuevo idioma: $_currentLanguage',
-                                    );
-                                  },
-                                ),
-                                const SizedBox(height: 4),
-                                _buildMenuItem(
-                                  icon: LucideIcons.bell,
-                                  title: _t('notifications'),
-                                  isDark: _isDarkMode,
-                                  onTap: () {},
-                                ),
-                                const SizedBox(height: 4),
-                                _buildMenuItem(
-                                  icon: _isDarkMode
-                                      ? LucideIcons.moon
-                                      : LucideIcons.sun,
-                                  title: _t('visualMode'),
-                                  isDark: _isDarkMode,
-                                  trailing: Switch.adaptive(
-                                    value: _isDarkMode,
-                                    onChanged: (value) {
-                                      setState(() {
-                                        _isDarkMode = value;
-                                      });
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                _buildMenuItem(
-                                  icon: LucideIcons.helpCircle,
-                                  title: _t('help'),
-                                  isDark: _isDarkMode,
-                                  onTap: () {},
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          // --- Footer ---
-                          const Divider(
-                            indent: 30,
-                            endIndent: 30,
-                            thickness: 0.5,
-                          ),
-                          _buildMenuItem(
-                            icon: LucideIcons.logOut,
-                            title: _t('logout'),
-                            isDark: _isDarkMode,
-                            textColor: Colors.redAccent,
-                            iconColor: Colors.redAccent,
-                            onTap: () {},
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 24),
-                            child: Column(
-                              children: [
-                                AnimatedSwitcher(
-                                  duration: const Duration(milliseconds: 300),
-                                  child: Text(
-                                    _t('footerName'),
-                                    key: ValueKey(_currentLanguage),
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: 2,
-                                      color: _isDarkMode
-                                          ? Colors.white12
-                                          : Colors.black12,
+                                // Línea divisora premium estilo Apple
+                                Container(
+                                  margin: const EdgeInsets.symmetric(horizontal: 20),
+                                  height: 0.5,
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: _isDarkMode
+                                          ? [
+                                              Colors.transparent,
+                                              Colors.white.withValues(alpha: 0.15),
+                                              Colors.white.withValues(alpha: 0.15),
+                                              Colors.transparent,
+                                            ]
+                                          : [
+                                              Colors.transparent,
+                                              Colors.black.withValues(alpha: 0.1),
+                                              Colors.black.withValues(alpha: 0.1),
+                                              Colors.transparent,
+                                            ],
                                     ),
                                   ),
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '${_t('version')} 1.0.0',
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    color: _isDarkMode
-                                        ? Colors.white24
-                                        : Colors.black26,
+
+                                // Items distribuidos en todo el espacio
+                                Expanded(
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                      children: [
+                                        _buildMenuItem(
+                                          icon: LucideIcons.languages,
+                                          title: _t('language'),
+                                          isDark: _isDarkMode,
+                                          trailing: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 10,
+                                              vertical: 5,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF4A90E2).withValues(alpha: 0.15),
+                                              borderRadius: BorderRadius.circular(7),
+                                            ),
+                                            child: Text(
+                                              _currentLanguage == 'es' ? 'ES' : 'EN',
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                                color: Color(0xFF4A90E2),
+                                                letterSpacing: 0.3,
+                                              ),
+                                            ),
+                                          ),
+                                          onTap: () {
+                                            setState(() {
+                                              _currentLanguage =
+                                                  (_currentLanguage == 'es') ? 'en' : 'es';
+                                            });
+                                            debugPrint(
+                                              'BOTÓN PULSADO - Nuevo idioma: $_currentLanguage',
+                                            );
+                                          },
+                                        ),
+                                        _buildMenuItem(
+                                          icon: LucideIcons.bell,
+                                          title: _t('notifications'),
+                                          isDark: _isDarkMode,
+                                          onTap: () {},
+                                        ),
+                                        _buildMenuItem(
+                                          icon: _isDarkMode
+                                              ? LucideIcons.moon
+                                              : LucideIcons.sun,
+                                          title: _t('visualMode'),
+                                          isDark: _isDarkMode,
+                                          trailing: Transform.scale(
+                                            scale: 0.8,
+                                            child: Switch.adaptive(
+                                              value: _isDarkMode,
+                                              activeColor: const Color(0xFF4A90E2),
+                                              onChanged: (value) {
+                                                setState(() {
+                                                  _isDarkMode = value;
+                                                });
+                                              },
+                                            ),
+                                          ),
+                                        ),
+                                        _buildMenuItem(
+                                          icon: LucideIcons.helpCircle,
+                                          title: _t('help'),
+                                          isDark: _isDarkMode,
+                                          onTap: () {},
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+
+                                // Separador
+                                Container(
+                                  margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                                  height: 0.5,
+                                  color: _isDarkMode
+                                      ? Colors.white.withValues(alpha: 0.1)
+                                      : Colors.black.withValues(alpha: 0.08),
+                                ),
+
+                                // Botón salir
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                                  child: _buildMenuItem(
+                                    icon: LucideIcons.logOut,
+                                    title: _t('logout'),
+                                    isDark: _isDarkMode,
+                                    textColor: const Color(0xFFFF3B30),
+                                    iconColor: const Color(0xFFFF3B30),
+                                    onTap: () {},
+                                  ),
+                                ),
+
+                                // Footer
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 24, top: 8),
+                                  child: Column(
+                                    children: [
+                                      AnimatedSwitcher(
+                                        duration: const Duration(milliseconds: 300),
+                                        child: Text(
+                                          _t('footerName'),
+                                          key: ValueKey(_currentLanguage),
+                                          style: TextStyle(
+                                            fontSize: 8,
+                                            fontWeight: FontWeight.w700,
+                                            letterSpacing: 2.0,
+                                            color: _isDarkMode
+                                                ? Colors.white.withValues(alpha: 0.2)
+                                                : Colors.black.withValues(alpha: 0.15),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        '${_t('version')} 1.0.0',
+                                        style: TextStyle(
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.w500,
+                                          color: _isDarkMode
+                                              ? Colors.white.withValues(alpha: 0.3)
+                                              : Colors.black.withValues(alpha: 0.25),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                        ],
+                        ),
                       ),
                     ),
-                  ),
+
+                    // Borde fino premium — overlay encima del contenido
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(
+                              color: _isDarkMode
+                                  ? Colors.white.withValues(alpha: 0.14)
+                                  : Colors.black.withValues(alpha: 0.1),
+                              width: 1.0,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -620,29 +712,15 @@ class _MainScreenState extends State<MainScreen>
           final mapZoom = snapshot?.zoom ?? 4.0;
           final isCompactLayout = MediaQuery.of(context).size.width < 760;
           final bottomInset = MediaQuery.of(context).padding.bottom;
-
-          final faunaSpecies = speciesProvider.items
-              .where((species) => _isFaunaSpecies(species))
-              .toList();
-          final floraSpecies = speciesProvider.items
-              .where((species) => _isFloraSpecies(species))
-              .toList();
-          final activeSpecies = _taxonomyFocus == 'flora'
-              ? floraSpecies
-              : faunaSpecies;
-          final groupedSpecies = _groupSpecies(activeSpecies);
-          final sortedGroups = groupedSpecies.keys.toList()
-            ..sort((a, b) => a.compareTo(b));
-          final visibleSpecies = _selectedTaxonomyGroup == 'all'
-              ? activeSpecies
-              : groupedSpecies[_selectedTaxonomyGroup] ?? const <Species>[];
-          final visibleMarkers = _selectedTaxonomyGroup == 'all'
-              ? markers
-              : markers.where((marker) => _markerMatchesSelectedGroup(marker, _selectedTaxonomyGroup)).toList();
+          final visibleMarkers = _visibleMarkersForTaxonomy(
+            markers,
+            speciesProvider.items,
+          );
 
           return Stack(
             children: [
               FlutterMap(
+                mapController: _mapController,
                 key: ValueKey(
                   '${mapCenter.latitude}_${mapCenter.longitude}_${mapZoom}_${visibleMarkers.length}_$_mapStyle',
                 ),
@@ -691,39 +769,23 @@ class _MainScreenState extends State<MainScreen>
                 ],
               ),
               Positioned(
-                top: MediaQuery.of(context).padding.top + 16,
-                left: 16,
-                right: 16,
-                child: SafeArea(
-                  bottom: false,
-                  child: _buildBackendSummaryCard(compact: true),
-                ),
-              ),
-              Positioned(
-                left: isCompactLayout ? 12 : 16,
-                right: isCompactLayout ? 12 : null,
-                bottom: bottomInset + (isCompactLayout ? 88 : 96),
-                child: SafeArea(
-                  top: false,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: isCompactLayout ? double.infinity : 520,
-                    ),
-                    child: _buildTaxonomyPanel(
-                      faunaSpecies: faunaSpecies,
-                      floraSpecies: floraSpecies,
-                      groupedSpecies: groupedSpecies,
-                      sortedGroups: sortedGroups,
-                      visibleSpecies: visibleSpecies,
-                      isCompact: isCompactLayout,
-                    ),
-                  ),
-                ),
-              ),
-              Positioned(
                 right: 16,
                 bottom: bottomInset + (isCompactLayout ? 226 : 248),
                 child: _buildSourceLegend(),
+              ),
+              Positioned(
+                left: 16,
+                bottom: bottomInset + (isCompactLayout ? 40 : 52),
+                child: FloatingActionButton(
+                  heroTag: 'mapLayersButton',
+                  backgroundColor: _isDarkMode
+                      ? const Color(0xFF1E1E1E)
+                      : Colors.white,
+                  foregroundColor: Colors.blueAccent,
+                  elevation: 4,
+                  onPressed: () => _showMapLayerSelector(context),
+                  child: const Icon(LucideIcons.layers, size: 18),
+                ),
               ),
             ],
           );
@@ -752,344 +814,15 @@ class _MainScreenState extends State<MainScreen>
             setState(() {
               if (index == 0) {
                 _taxonomyFocus = 'fauna';
-                _selectedTaxonomyGroup = 'all';
+                _activeTaxonomyGroup = null;
               } else if (index == 1) {
                 _taxonomyFocus = 'flora';
-                _selectedTaxonomyGroup = 'all';
+                _activeTaxonomyGroup = null;
               }
             });
+            // mostrar panel de selección de grupo para el foco actual
+            Future.microtask(() => _showTaxonomyPanel(context));
           },
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTaxonomyPanel({
-    required List<Species> faunaSpecies,
-    required List<Species> floraSpecies,
-    required Map<String, List<Species>> groupedSpecies,
-    required List<String> sortedGroups,
-    required List<Species> visibleSpecies,
-    required bool isCompact,
-  }) {
-    final activeSpecies = _taxonomyFocus == 'flora'
-        ? floraSpecies
-        : faunaSpecies;
-    final title = _taxonomyFocus == 'flora' ? _t('flora') : _t('fauna');
-    final subtitle = _taxonomyFocus == 'flora'
-        ? 'Plantas y hongos para filtrar'
-        : 'Grupos taxonómicos de fauna para filtrar';
-    final panelHeight = isCompact ? 228.0 : 280.0;
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      padding: const EdgeInsets.all(14),
-      height: panelHeight,
-      decoration: BoxDecoration(
-        color: _isDarkMode
-            ? Colors.black.withValues(alpha: 0.78)
-            : Colors.white.withValues(alpha: 0.94),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.16),
-            blurRadius: 24,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: Colors.blueAccent.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(
-                  _taxonomyFocus == 'flora'
-                      ? LucideIcons.leaf
-                      : LucideIcons.cat,
-                  color: Colors.blueAccent,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: _isDarkMode ? Colors.white : Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: _isDarkMode ? Colors.white60 : Colors.black54,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              _buildTaxonomyCounter(
-                activeSpecies.length,
-                _taxonomyFocus == 'flora' ? Colors.green : Colors.orange,
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _buildFocusChip(
-                  label: _t('fauna'),
-                  selected: _taxonomyFocus == 'fauna',
-                  color: Colors.orange,
-                  onTap: () {
-                    setState(() {
-                      _taxonomyFocus = 'fauna';
-                      _selectedTaxonomyGroup = 'all';
-                    });
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildFocusChip(
-                  label: _t('flora'),
-                  selected: _taxonomyFocus == 'flora',
-                  color: Colors.green,
-                  onTap: () {
-                    setState(() {
-                      _taxonomyFocus = 'flora';
-                      _selectedTaxonomyGroup = 'all';
-                    });
-                  },
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      _buildGroupChip(
-                        label: 'Todos',
-                        selected: _selectedTaxonomyGroup == 'all',
-                        count: activeSpecies.length,
-                        onTap: () {
-                          setState(() {
-                            _selectedTaxonomyGroup = 'all';
-                          });
-                        },
-                      ),
-                      const SizedBox(width: 8),
-                      for (final group in sortedGroups) ...[
-                        _buildGroupChip(
-                          label: group,
-                          selected: _selectedTaxonomyGroup == group,
-                          count: groupedSpecies[group]?.length ?? 0,
-                          onTap: () {
-                            setState(() {
-                              _selectedTaxonomyGroup = group;
-                            });
-                          },
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: visibleSpecies.isEmpty
-                      ? Center(
-                          child: Text(
-                            'No hay especies en este filtro',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: _isDarkMode ? Colors.white54 : Colors.black54,
-                            ),
-                          ),
-                        )
-                      : ListView.separated(
-                          padding: EdgeInsets.zero,
-                          itemCount: visibleSpecies.length,
-                          separatorBuilder: (context, index) => const SizedBox(height: 8),
-                          itemBuilder: (context, index) {
-                            final species = visibleSpecies[index];
-                            return Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                              decoration: BoxDecoration(
-                                color: _isDarkMode ? Colors.white.withValues(alpha: 0.05) : const Color(0xFFF6F7FB),
-                                borderRadius: BorderRadius.circular(18),
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    width: 34,
-                                    height: 34,
-                                    decoration: BoxDecoration(
-                                      color: (_taxonomyFocus == 'flora' ? Colors.green : Colors.orange).withValues(alpha: 0.14),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Icon(
-                                      _taxonomyFocus == 'flora' ? LucideIcons.leaf : LucideIcons.cat,
-                                      color: _taxonomyFocus == 'flora' ? Colors.green : Colors.orange,
-                                      size: 18,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          species.name,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w700,
-                                            color: _isDarkMode ? Colors.white : Colors.black87,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          species.scientificName ?? _taxonomyGroupLabel(species),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            color: _isDarkMode ? Colors.white60 : Colors.black54,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFocusChip({
-    required String label,
-    required bool selected,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(16),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: selected
-              ? color.withValues(alpha: 0.16)
-              : (_isDarkMode
-                    ? Colors.white.withValues(alpha: 0.05)
-                    : const Color(0xFFF3F5F9)),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: selected ? color : Colors.transparent,
-            width: 1.5,
-          ),
-        ),
-        child: Center(
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: selected
-                  ? color
-                  : (_isDarkMode ? Colors.white70 : Colors.black87),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGroupChip({
-    required String label,
-    required bool selected,
-    required int count,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected
-              ? Colors.blueAccent.withValues(alpha: 0.16)
-              : (_isDarkMode
-                    ? Colors.white.withValues(alpha: 0.06)
-                    : const Color(0xFFF3F5F9)),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: selected ? Colors.blueAccent : Colors.transparent,
-          ),
-        ),
-        child: Text(
-          '$label · $count',
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            color: selected
-                ? Colors.blueAccent
-                : (_isDarkMode ? Colors.white70 : Colors.black87),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTaxonomyCounter(int value, Color color) {
-    return Container(
-      width: 42,
-      height: 42,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.16),
-        shape: BoxShape.circle,
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        value.toString(),
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w800,
-          color: color,
         ),
       ),
     );
@@ -1119,6 +852,152 @@ class _MainScreenState extends State<MainScreen>
           _buildLegendDot(color: Colors.green, label: 'iNaturalist'),
         ],
       ),
+    );
+  }
+
+  void _showMapLayerSelector(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return Container(
+          margin: const EdgeInsets.all(8),
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
+          decoration: BoxDecoration(
+            color: _isDarkMode ? const Color(0xFF171717) : Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.2),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 30,
+                      height: 30,
+                      decoration: BoxDecoration(
+                        color: Colors.blueAccent.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        LucideIcons.layers,
+                        color: Colors.blueAccent,
+                        size: 16,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _t('mapLayers'),
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: _isDarkMode
+                                  ? Colors.white
+                                  : Colors.black87,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _t('selectMapView'),
+                            style: TextStyle(
+                              fontSize: 10,
+                              height: 1.1,
+                              color: _isDarkMode
+                                  ? Colors.white60
+                                  : Colors.black54,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints(),
+                      padding: EdgeInsets.zero,
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      icon: Icon(
+                        LucideIcons.x,
+                        size: 16,
+                        color: _isDarkMode ? Colors.white70 : Colors.black54,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                GridView.count(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  crossAxisCount: 4,
+                  crossAxisSpacing: 8,
+                  mainAxisSpacing: 8,
+                  childAspectRatio: 0.78,
+                  children: [
+                    _buildLayerOption(
+                      label: _t('base'),
+                      style: 'outdoors-v12',
+                      icon: LucideIcons.map,
+                      onTap: () {
+                        setState(() {
+                          _mapStyle = 'outdoors-v12';
+                        });
+                        Navigator.of(sheetContext).pop();
+                      },
+                    ),
+                    _buildLayerOption(
+                      label: _t('years'),
+                      style: 'light-v11',
+                      icon: LucideIcons.sun,
+                      onTap: () {
+                        setState(() {
+                          _mapStyle = 'light-v11';
+                        });
+                        Navigator.of(sheetContext).pop();
+                      },
+                    ),
+                    _buildLayerOption(
+                      label: _t('satellite'),
+                      style: 'satellite-streets-v12',
+                      icon: LucideIcons.layers,
+                      onTap: () {
+                        setState(() {
+                          _mapStyle = 'satellite-streets-v12';
+                        });
+                        Navigator.of(sheetContext).pop();
+                      },
+                    ),
+                    _buildLayerOption(
+                      label: _t('dark'),
+                      style: 'dark-v11',
+                      icon: LucideIcons.moon,
+                      onTap: () {
+                        setState(() {
+                          _mapStyle = 'dark-v11';
+                        });
+                        Navigator.of(sheetContext).pop();
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1167,143 +1046,1731 @@ class _MainScreenState extends State<MainScreen>
             ),
           ),
         ),
+        Positioned(
+          bottom: 1,
+          child: Icon(
+                            _taxonomyFocusIcon(),
+            size: 14,
+            color: color.withValues(alpha: 0.9),
+          ),
+        ),
       ],
     );
   }
 
-  Map<String, List<Species>> _groupSpecies(List<Species> species) {
-    final groups = <String, List<Species>>{};
-    for (final item in species) {
-      final label = _taxonomyGroupLabel(item);
-      groups.putIfAbsent(label, () => <Species>[]).add(item);
-    }
-    return groups;
+  bool _markerIsFlora(MapMarkerData marker) {
+    final text = '${marker.groupName} ${marker.title}'.toLowerCase();
+    final normalized = _normalizeKey(text);
+    return normalized.contains('plantae') ||
+        normalized.contains('planta') ||
+        normalized.contains('fungi') ||
+        normalized.contains('hong') ||
+        normalized.contains('hongo');
   }
 
-  String _taxonomyGroupLabel(Species species) {
-    final rawValue = species.category?.trim().isNotEmpty == true
-        ? species.category!.trim()
-        : species.kingdom?.trim();
-    if (rawValue == null || rawValue.isEmpty) {
-      return 'Sin grupo';
-    }
-    return rawValue
-        .split(RegExp(r'\s+'))
-        .map(
-          (word) => word.isEmpty
-              ? word
-              : '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}',
-        )
-        .join(' ');
+  bool _markerIsFauna(MapMarkerData marker) {
+    final text = '${marker.groupName} ${marker.title}'.toLowerCase();
+    final normalized = _normalizeKey(text);
+    
+    final isAnimal = 
+        normalized.contains('insect') ||
+        normalized.contains('insecta') ||
+        normalized.contains('coleoptera') ||
+        normalized.contains('hymenoptera') ||
+        normalized.contains('aves') ||
+        normalized.contains('ave') ||
+        normalized.contains('bird') ||
+        normalized.contains('anfib') ||
+        normalized.contains('amphib') ||
+        normalized.contains('amphibia') ||
+        normalized.contains('reptil') ||
+        normalized.contains('reptilia') ||
+        normalized.contains('lizard') ||
+        normalized.contains('reptile') ||
+        normalized.contains('fish') ||
+        normalized.contains('pez') ||
+        normalized.contains('pisces') ||
+        normalized.contains('mammal') ||
+        normalized.contains('mammalia') ||
+        normalized.contains('mamif') ||
+        normalized.contains('mamifer') ||
+        normalized.contains('animal') ||
+        normalized.contains('animalia');
+    
+    // Es fauna si es un animal específico Y NO es flora
+    return isAnimal && !_markerIsFlora(marker);
   }
 
+  IconData _taxonomyFocusIcon() {
+    return _taxonomyFocus == 'flora' ? Icons.eco : Icons.pets;
+  }
+
+  List<MapMarkerData> _visibleMarkersForTaxonomy(
+    List<MapMarkerData> markers,
+    List<Species> species,
+  ) {
+    // Primero, filtrar por fauna/flora según el tab activo
+    final filtered = markers.where((marker) {
+      if (_taxonomyFocus == 'flora') {
+        return _markerIsFlora(marker);
+      } else {
+        return _markerIsFauna(marker);
+      }
+    }).toList();
+
+    // Si hay un grupo activo, filtrar también por ese grupo
+    if (_activeTaxonomyGroup != null && _activeTaxonomyGroup!.isNotEmpty) {
+      final active = _normalizeKey(_activeTaxonomyGroup!);
+      final byGroup = filtered
+          .where((m) => _normalizeKey(m.groupName ?? '') == active)
+          .toList();
+      if (byGroup.isNotEmpty) return byGroup;
+    }
+
+    return filtered;
+  }
+
+  void _showTaxonomyPanel(BuildContext context) {
+    final mapProvider = context.read<MapProvider>();
+    final allMarkers = mapProvider.snapshot?.markers ?? const <MapMarkerData>[];
+    
+    // Filtrar marcadores por fauna/flora según el tab activo
+    final markers = allMarkers.where((marker) {
+      if (_taxonomyFocus == 'flora') {
+        return _markerIsFlora(marker);
+      } else {
+        return _markerIsFauna(marker);
+      }
+    }).toList();
+
+    // Contadores por grupo y por fuente
+    final Map<String, Map<String, int>> countsBySource = {};
+    for (final m in markers) {
+      final g = (m.groupName ?? '').trim();
+      if (g.isEmpty) continue;
+      final src = m.resolvedSourceType;
+      countsBySource.putIfAbsent(g, () => {});
+      countsBySource[g]![src] = (countsBySource[g]![src] ?? 0) + 1;
+      countsBySource[g]!['total'] = (countsBySource[g]!['total'] ?? 0) + 1;
+    }
+
+    String sourceFilter = 'all'; // 'all' | 'inaturalist' | 'odk'
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            // Solo mostrar grupos que tengan al menos 1 observación según el filtro activo
+            final groups = countsBySource.keys.where((g) {
+              final counts = countsBySource[g] ?? {};
+              if (sourceFilter == 'all') return (counts['total'] ?? 0) > 0;
+              return (counts[sourceFilter] ?? 0) > 0;
+            }).toList()
+              ..sort((a, b) {
+                final countA = sourceFilter == 'all'
+                    ? (countsBySource[a]?['total'] ?? 0)
+                    : (countsBySource[a]?[sourceFilter] ?? 0);
+                final countB = sourceFilter == 'all'
+                    ? (countsBySource[b]?['total'] ?? 0)
+                    : (countsBySource[b]?[sourceFilter] ?? 0);
+                final byCount = countB.compareTo(countA);
+                if (byCount != 0) return byCount;
+                return a.toLowerCase().compareTo(b.toLowerCase());
+              });
+
+            final displayedCount = sourceFilter == 'all'
+              ? markers.length
+              : markers
+                  .where((marker) => marker.resolvedSourceType == sourceFilter)
+                  .length;
+            // Usar el mismo tamaño aumentado para Flora y Fauna
+            final isLargeModal = _taxonomyFocus == 'fauna' || _taxonomyFocus == 'flora';
+
+            return SafeArea(
+              child: Container(
+                margin: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(12),
+                constraints: isLargeModal ? BoxConstraints(maxHeight: MediaQuery.of(sheetCtx).size.height * 0.7) : null,
+                decoration: BoxDecoration(
+                  color: _isDarkMode ? const Color(0xFF171717) : Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  mainAxisSize: isLargeModal ? MainAxisSize.max : MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: Colors.blueAccent.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            _taxonomyFocus == 'flora' ? Icons.eco : Icons.pets,
+                            color: _taxonomyFocus == 'flora' ? Colors.green : Colors.orangeAccent,
+                            size: 18,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _taxonomyFocus == 'fauna' || _taxonomyFocus == 'flora'
+                                    ? 'Catálogo taxonómico'
+                                    : 'Grupos taxonómicos',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w800,
+                                  color: _isDarkMode ? Colors.white : Colors.black87,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _taxonomyFocus == 'fauna'
+                                    ? 'Fauna'
+                                    : _taxonomyFocus == 'flora'
+                                        ? 'Flora'
+                                        : 'Muestra solo los grupos reales que existen en la base de datos',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: _isDarkMode ? Colors.white60 : Colors.black54,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (isLargeModal)
+                          IconButton(
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            onPressed: () => Navigator.of(sheetCtx).pop(),
+                            icon: Icon(Icons.close, size: 20, color: _isDarkMode ? Colors.white70 : Colors.black54),
+                          ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.blueAccent,
+                            borderRadius: BorderRadius.circular(999),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.blueAccent.withValues(alpha: 0.24),
+                                blurRadius: 14,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
+                          ),
+                          child: Text(
+                            '$displayedCount',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        color: _isDarkMode
+                            ? Colors.white.withValues(alpha: 0.05)
+                            : const Color(0xFFF4F5F8),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: _isDarkMode
+                              ? Colors.white.withValues(alpha: 0.07)
+                              : Colors.black.withValues(alpha: 0.035),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _buildSourceFilterButton(
+                              label: 'Todos',
+                              isSelected: sourceFilter == 'all',
+                              accentColor: Colors.blueAccent,
+                              count: markers.length,
+                              onTap: () => setModalState(() {
+                                sourceFilter = 'all';
+                                _activeTaxonomyGroup = null;
+                              }),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: _buildSourceFilterButton(
+                              label: 'ODK',
+                              isSelected: sourceFilter == 'odk',
+                              accentColor: Colors.orangeAccent,
+                              count: countsBySource.values.fold<int>(
+                                0,
+                                (sum, counts) => sum + (counts['odk'] ?? 0),
+                              ),
+                              onTap: () => setModalState(() {
+                                sourceFilter = 'odk';
+                                _activeTaxonomyGroup = null;
+                              }),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: _buildSourceFilterButton(
+                              label: 'iNaturalist',
+                              isSelected: sourceFilter == 'inaturalist',
+                              accentColor: Colors.green,
+                              count: countsBySource.values.fold<int>(
+                                0,
+                                (sum, counts) => sum + (counts['inaturalist'] ?? 0),
+                              ),
+                              onTap: () => setModalState(() {
+                                sourceFilter = 'inaturalist';
+                                _activeTaxonomyGroup = null;
+                              }),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    if (groups.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Text(
+                          'No se encontraron grupos específicos',
+                          style: TextStyle(color: _isDarkMode ? Colors.white60 : Colors.black54),
+                        ),
+                      )
+                    else if (isLargeModal)
+                      // Vertical, scrollable list for fauna modal
+                      Expanded(
+                        child: ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(2, 8, 2, 6),
+                          physics: const BouncingScrollPhysics(),
+                          itemCount: groups.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (c, i) {
+                            final g = groups[i];
+                            final counts = countsBySource[g] ?? {};
+                            final total = counts['total'] ?? 0;
+                            final visibleCount = sourceFilter == 'all' ? total : (counts[sourceFilter] ?? 0);
+                            final normalized = _normalizeKey(g);
+                            final selected = _normalizeKey(_activeTaxonomyGroup ?? '') == normalized;
+                            final groupAccent = _taxonomyFocus == 'flora'
+                                ? Colors.green
+                                : Colors.orangeAccent;
+                            final tileColor = selected
+                                ? groupAccent.withValues(alpha: _isDarkMode ? 0.18 : 0.12)
+                                : (_isDarkMode
+                                    ? Colors.white.withValues(alpha: 0.04)
+                                    : const Color(0xFFF7F7FA));
+                            final borderColor = selected
+                                ? groupAccent.withValues(alpha: 0.42)
+                                : (_isDarkMode
+                                    ? Colors.white.withValues(alpha: 0.08)
+                                    : Colors.black.withValues(alpha: 0.05));
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 6.0),
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(22),
+                                  onTap: () {
+                                    setState(() {
+                                      _activeTaxonomyGroup = selected ? null : g;
+                                    });
+                                    if (!selected) {
+                                      // Abrir la lista del grupo encima del panel actual sin cerrarlo,
+                                      // de modo que "Regresar" solo cierre esta ventana y revele
+                                      // el panel de taxonomía en el mismo estado que antes.
+                                      Future.microtask(() => _showGroupList(context, g, markers, sourceFilter: sourceFilter));
+                                    }
+                                  },
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 180),
+                                    curve: Curves.easeOutCubic,
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                                    decoration: BoxDecoration(
+                                      color: tileColor,
+                                      borderRadius: BorderRadius.circular(22),
+                                      border: Border.all(color: borderColor),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(
+                                            alpha: _isDarkMode ? 0.14 : 0.04,
+                                          ),
+                                          blurRadius: selected ? 18 : 12,
+                                          offset: const Offset(0, 6),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Container(
+                                          width: 40,
+                                          height: 40,
+                                          alignment: Alignment.center,
+                                          decoration: BoxDecoration(
+                                            gradient: selected
+                                                ? LinearGradient(
+                                                    begin: Alignment.topLeft,
+                                                    end: Alignment.bottomRight,
+                                                    colors: [
+                                                      groupAccent.withValues(alpha: 0.26),
+                                                      groupAccent.withValues(alpha: 0.14),
+                                                    ],
+                                                  )
+                                                : null,
+                                            color: selected
+                                                ? null
+                                                : groupAccent.withValues(alpha: _isDarkMode ? 0.14 : 0.10),
+                                            borderRadius: BorderRadius.circular(14),
+                                          ),
+                                          child: Center(
+                                            child: _groupIconWidget(
+                                              g,
+                                              size: 18,
+                                              color: groupAccent,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Flexible(
+                                          fit: FlexFit.loose,
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                g,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  fontSize: 13.5,
+                                                  fontWeight: FontWeight.w700,
+                                                  letterSpacing: 0.1,
+                                                  color: _isDarkMode ? Colors.white : Colors.black87,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                selected ? 'Seleccionado' : 'Toca para ver observaciones',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  height: 1.1,
+                                                  color: _isDarkMode ? Colors.white60 : Colors.black54,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 8),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: selected
+                                                ? groupAccent.withValues(alpha: 0.95)
+                                                : groupAccent.withValues(alpha: 0.14),
+                                            borderRadius: BorderRadius.circular(999),
+                                          ),
+                                          child: Text(
+                                            '$visibleCount',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w800,
+                                              color: selected ? Colors.white : groupAccent,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Icon(
+                                          LucideIcons.chevronRight,
+                                          size: 16,
+                                          color: _isDarkMode ? Colors.white38 : Colors.black38,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      )
+                    else
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: groups.map((g) {
+                            final counts = countsBySource[g] ?? {};
+                            final total = counts['total'] ?? 0;
+                            final visibleCount = sourceFilter == 'all' ? total : (counts[sourceFilter] ?? 0);
+                            final normalized = _normalizeKey(g);
+                            final selected = _normalizeKey(_activeTaxonomyGroup ?? '') == normalized;
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 8.0),
+                              child: ChoiceChip(
+                                label: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _groupIconWidget(g, size: 16, color: Colors.blueAccent),
+                                    const SizedBox(width: 8),
+                                    Text(g, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blueAccent.withValues(alpha: 0.12),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Text('$visibleCount', style: const TextStyle(fontSize: 11, color: Colors.blueAccent)),
+                                    ),
+                                  ],
+                                ),
+                                selected: selected,
+                                onSelected: (sel) {
+                                  setState(() {
+                                    _activeTaxonomyGroup = sel ? g : null;
+                                  });
+                                  if (sel) {
+                                    Future.microtask(() => _showGroupList(context, g, markers, sourceFilter: sourceFilter));
+                                  }
+                                },
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    const SizedBox(height: 10),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showGroupList(BuildContext context, String group, List<MapMarkerData> markers, {String sourceFilter = 'all'}) {
+    final normalized = _normalizeKey(group);
+    // Filtrar por grupo Y por fuente activa
+    final items = markers.where((m) {
+      if (_normalizeKey(m.groupName ?? '') != normalized) return false;
+      if (sourceFilter == 'all') return true;
+      return m.resolvedSourceType == sourceFilter;
+    }).toList();
+    final groupAccent = _taxonomyFocus == 'flora' ? Colors.green : Colors.orangeAccent;
+    final isAnimalGroup = normalized.contains('insect') || normalized.contains('insecta') || normalized.contains('coleoptera') || normalized.contains('hymenoptera') || normalized.contains('aves') || normalized.contains('ave') || normalized.contains('bird') || normalized.contains('anfib') || normalized.contains('amphib') || normalized.contains('amphibia') || normalized.contains('reptil') || normalized.contains('reptilia') || normalized.contains('lizard') || normalized.contains('reptile') || normalized.contains('fish') || normalized.contains('pez') || normalized.contains('pisces') || normalized.contains('mammal') || normalized.contains('mammalia') || normalized.contains('mamif') || normalized.contains('mamifer') || normalized.contains('animal') || normalized.contains('animalia');
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.all(8),
+            constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.76),
+            decoration: BoxDecoration(
+              color: _isDarkMode ? const Color(0xFF171717) : Colors.white,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(
+                color: _isDarkMode
+                    ? Colors.white.withValues(alpha: 0.06)
+                    : Colors.black.withValues(alpha: 0.04),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: _isDarkMode ? 0.28 : 0.10),
+                  blurRadius: 28,
+                  offset: const Offset(0, 14),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 42,
+                    height: 5,
+                    margin: const EdgeInsets.only(top: 10),
+                    decoration: BoxDecoration(
+                      color: _isDarkMode ? Colors.white24 : Colors.black12,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 14, 12),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                groupAccent.withValues(alpha: 0.28),
+                                groupAccent.withValues(alpha: 0.14),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Center(
+                            child: _groupIconWidget(group, size: 22, color: groupAccent),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                group,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: -0.2,
+                                  color: _isDarkMode ? Colors.white : Colors.black87,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _taxonomyFocus == 'flora'
+                                    ? 'Observaciones de flora dentro de este grupo'
+                                    : 'Observaciones de fauna dentro de este grupo',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  height: 1.15,
+                                  color: _isDarkMode ? Colors.white60 : Colors.black54,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                    decoration: BoxDecoration(
+                                      color: groupAccent.withValues(alpha: _isDarkMode ? 0.18 : 0.12),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(
+                                      '${items.length} registros',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: groupAccent,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                    decoration: BoxDecoration(
+                                      color: _isDarkMode
+                                          ? Colors.white.withValues(alpha: 0.06)
+                                          : Colors.black.withValues(alpha: 0.04),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(
+                                        // Mostrar 'Flora' cuando el foco de taxonomía esté en flora,
+                                        // 'Fauna' cuando sea un grupo animal en fauna, de lo contrario 'Grupo taxonómico'.
+                                        _taxonomyFocus == 'flora'
+                                          ? 'Flora'
+                                          : (isAnimalGroup && _taxonomyFocus == 'fauna' ? 'Fauna' : 'Grupo taxonómico'),
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: _isDarkMode ? Colors.white70 : Colors.black54,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          icon: Icon(
+                            // Show a back arrow for the same-kind groups (fauna groups when in fauna,
+                            // and flora groups — including plants and fungi — when in flora). Otherwise show close.
+                            ((_taxonomyFocus == 'fauna' && isAnimalGroup) ||
+                                    (_taxonomyFocus == 'flora' && (normalized.contains('planta') || normalized.contains('plant') || normalized.contains('plantae') || normalized.contains('fungi') || normalized.contains('hongo') || normalized.contains('hong'))))
+                                ? Icons.arrow_back_rounded
+                                : Icons.close_rounded,
+                            size: 20,
+                            color: _isDarkMode ? Colors.white70 : Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: _isDarkMode ? Colors.white.withValues(alpha: 0.07) : Colors.black.withValues(alpha: 0.06),
+                  ),
+                  Expanded(
+                    child: items.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(24.0),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 64,
+                                    height: 64,
+                                    decoration: BoxDecoration(
+                                      color: groupAccent.withValues(alpha: 0.10),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: Icon(
+                                      _groupIconWidget(group, size: 26, color: groupAccent) is Icon
+                                          ? _iconForGroup(group)
+                                          : Icons.search,
+                                      color: groupAccent,
+                                      size: 28,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 14),
+                                  Text(
+                                    'No hay observaciones para $group',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: _isDarkMode ? Colors.white : Colors.black87,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Prueba con otro grupo o revisa más tarde si aún no hay registros disponibles.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      height: 1.25,
+                                      color: _isDarkMode ? Colors.white60 : Colors.black54,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
+                            itemCount: items.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 10),
+                            itemBuilder: (c, i) {
+                              final m = items[i];
+                              final sourceType = m.resolvedSourceType;
+                              final sourceColor = sourceType == 'odk' ? Colors.orangeAccent : Colors.green;
+                              // removed author display for a cleaner, premium card layout
+                              return Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(22),
+                                  onTap: () {
+                                    _mapController.move(m.position, 14.5);
+                                    Future.delayed(const Duration(milliseconds: 220), () {
+                                      if (!mounted) return;
+                                      _showObservationContextModal(context, m);
+                                    });
+                                  },
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 220),
+                                    curve: Curves.easeOutCubic,
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: _isDarkMode
+                                          ? Colors.white.withValues(alpha: 0.04)
+                                          : const Color(0xFFF7F8FB),
+                                      borderRadius: BorderRadius.circular(22),
+                                      border: Border.all(
+                                        color: _isDarkMode
+                                            ? Colors.white.withValues(alpha: 0.06)
+                                            : Colors.black.withValues(alpha: 0.04),
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(alpha: _isDarkMode ? 0.14 : 0.04),
+                                          blurRadius: 14,
+                                          offset: const Offset(0, 6),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Container(
+                                          width: 44,
+                                          height: 44,
+                                          decoration: BoxDecoration(
+                                            color: groupAccent.withValues(alpha: _isDarkMode ? 0.16 : 0.10),
+                                            borderRadius: BorderRadius.circular(16),
+                                          ),
+                                          child: Center(
+                                            child: _markerIconWidget(m, size: 22, color: groupAccent),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Row(
+                                                crossAxisAlignment: CrossAxisAlignment.center,
+                                                children: [
+                                                  Expanded(
+                                                    child: Text(
+                                                      m.title,
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: TextStyle(
+                                                        fontSize: 14.5,
+                                                        fontWeight: FontWeight.w800,
+                                                        letterSpacing: -0.1,
+                                                        color: _isDarkMode ? Colors.white : Colors.black87,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 6),
+                                              Row(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Expanded(
+                                                    child: Wrap(
+                                                      spacing: 8,
+                                                      runSpacing: 6,
+                                                      alignment: WrapAlignment.start,
+                                                      crossAxisAlignment: WrapCrossAlignment.center,
+                                                      children: [
+                                                        // Source chip
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                          decoration: BoxDecoration(
+                                                            color: sourceColor.withValues(alpha: _isDarkMode ? 0.16 : 0.12),
+                                                            borderRadius: BorderRadius.circular(999),
+                                                            boxShadow: [
+                                                              BoxShadow(
+                                                                color: Colors.black.withValues(alpha: _isDarkMode ? 0.06 : 0.02),
+                                                                blurRadius: 6,
+                                                                offset: const Offset(0, 2),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                          child: Text(
+                                                            sourceType == 'odk' ? 'ODK' : 'iNaturalist',
+                                                            style: TextStyle(
+                                                              fontSize: 12,
+                                                              fontWeight: FontWeight.w800,
+                                                              color: sourceColor,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        // Date chip (if available)
+                                                        if (m.observedAt != null)
+                                                          Container(
+                                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                            decoration: BoxDecoration(
+                                                              color: _isDarkMode
+                                                                  ? Colors.white.withValues(alpha: 0.04)
+                                                                  : Colors.black.withValues(alpha: 0.04),
+                                                              borderRadius: BorderRadius.circular(999),
+                                                            ),
+                                                            child: Text(
+                                                              _formatObservationDate(m.observedAt),
+                                                              style: TextStyle(
+                                                                fontSize: 12,
+                                                                fontWeight: FontWeight.w700,
+                                                                color: _isDarkMode ? Colors.white70 : Colors.black54,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        // Coordinates chip
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                                          decoration: BoxDecoration(
+                                                            color: _isDarkMode
+                                                                ? Colors.white.withValues(alpha: 0.06)
+                                                                : Colors.black.withValues(alpha: 0.06),
+                                                            borderRadius: BorderRadius.circular(999),
+                                                            border: Border.all(
+                                                              color: _isDarkMode ? Colors.white10 : Colors.black12,
+                                                            ),
+                                                          ),
+                                                          child: Row(
+                                                            mainAxisSize: MainAxisSize.min,
+                                                            children: [
+                                                              Text(
+                                                                'Coordenadas  ',
+                                                                style: TextStyle(
+                                                                  fontSize: 11,
+                                                                  fontWeight: FontWeight.w600,
+                                                                  color: _isDarkMode ? Colors.white54 : Colors.black45,
+                                                                ),
+                                                              ),
+                                                              Flexible(
+                                                                child: Text(
+                                                                  '${m.position.latitude.toStringAsFixed(4)}, ${m.position.longitude.toStringAsFixed(4)}',
+                                                                  maxLines: 1,
+                                                                  overflow: TextOverflow.ellipsis,
+                                                                  style: TextStyle(
+                                                                    fontSize: 12,
+                                                                    fontWeight: FontWeight.w700,
+                                                                    color: _isDarkMode ? Colors.white : Colors.black87,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  // Small separate open icon to the right of the chips
+                                                  Material(
+                                                    color: Colors.transparent,
+                                                    child: InkWell(
+                                                      borderRadius: BorderRadius.circular(8),
+                                                      onTap: () {
+                                                        // Abrimos el detalle encima sin cerrar la lista
+                                                        _mapController.move(m.position, 14.5);
+                                                        Future.delayed(const Duration(milliseconds: 220), () {
+                                                          if (!mounted) return;
+                                                          _showObservationContextModal(context, m);
+                                                        });
+                                                      },
+                                                      child: Container(
+                                                        padding: const EdgeInsets.all(6),
+                                                        child: Icon(
+                                                          Icons.open_in_new,
+                                                          size: 18,
+                                                          color: _isDarkMode ? Colors.white38 : Colors.black38,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showObservationContextModal(BuildContext context, MapMarkerData marker) {
+    final sourceType = marker.resolvedSourceType;
+    final sourceColor = sourceType == 'odk' ? Colors.orangeAccent : Colors.green;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: false,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.all(8),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            decoration: BoxDecoration(
+              color: _isDarkMode ? const Color(0xFF171717) : Colors.white,
+              borderRadius: BorderRadius.circular(26),
+              border: Border.all(
+                color: _isDarkMode
+                    ? Colors.white.withValues(alpha: 0.06)
+                    : Colors.black.withValues(alpha: 0.04),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: _isDarkMode ? 0.28 : 0.12),
+                  blurRadius: 24,
+                  offset: const Offset(0, 12),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 42,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: _isDarkMode ? Colors.white24 : Colors.black12,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        color: sourceColor.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Icon(
+                        _markerIconWidget(marker, size: 22, color: sourceColor) is Icon
+                            ? _iconForMarker(marker)
+                            : Icons.place,
+                        color: sourceColor,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            marker.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.2,
+                              color: _isDarkMode ? Colors.white : Colors.black87,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Especie ubicada en el mapa con datos reales',
+                            style: TextStyle(
+                              fontSize: 12,
+                              height: 1.15,
+                              color: _isDarkMode ? Colors.white60 : Colors.black54,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      icon: Icon(
+                        Icons.close_rounded,
+                        size: 20,
+                        color: _isDarkMode ? Colors.white70 : Colors.black54,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildContextInfoChip(
+                        label: 'Especie',
+                        value: marker.title,
+                        accentColor: sourceColor,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _buildContextInfoChip(
+                        label: 'Autor',
+                        value: (marker.subtitle?.trim().isNotEmpty == true)
+                            ? marker.subtitle!.trim()
+                            : 'No disponible',
+                        accentColor: _isDarkMode ? Colors.white70 : Colors.black54,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                    Row(
+                  children: [
+                    Expanded(
+                      child: FutureBuilder<String?>(
+                        future: _resolveObservationPlaceName(marker.position),
+                        builder: (ctx, snap) {
+                          final place = snap.data?.trim();
+                          final value = place != null && place.isNotEmpty
+                              ? place
+                              : _formatObservationLocation(marker.position);
+                          return _buildContextInfoChip(
+                            label: 'Ubicación',
+                            value: value,
+                            accentColor: _isDarkMode ? Colors.white70 : Colors.black54,
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    // Coordinates removed to avoid overflow; location shows short name
+                  ],
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: sourceColor,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    onPressed: () => Navigator.of(sheetContext).pop(),
+                    child: const Text('Cerrar'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildContextInfoChip({
+    required String label,
+    required String value,
+    required Color accentColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _isDarkMode
+            ? Colors.white.withValues(alpha: 0.04)
+            : const Color(0xFFF7F8FB),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: _isDarkMode
+              ? Colors.white.withValues(alpha: 0.06)
+              : Colors.black.withValues(alpha: 0.04),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 9.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.9,
+              color: _isDarkMode ? Colors.white38 : Colors.black38,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+              color: accentColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+  IconData _iconForMarker(MapMarkerData m) {
+    final group = (m.groupName ?? '').trim();
+    if (group.isNotEmpty) {
+      return _iconForGroup(group);
+    }
+
+    final keys = '${m.title} ${m.subtitle ?? ''}'.toLowerCase();
+    final n = _normalizeKey(keys);
+    if (n.contains('insect') || n.contains('insecta') || n.contains('coleoptera') || n.contains('hymenoptera')) {
+      return Icons.bug_report;
+    }
+    if (n.contains('aves') || n.contains('ave') || n.contains('bird')) {
+      return Icons.flutter_dash;
+
+    }
+    if (n.contains('anfib') || n.contains('amphib') || n.contains('amphibia')) {
+      return Icons.water_drop;
+    }
+    if (n.contains('reptil') || n.contains('reptilia') || n.contains('lizard') || n.contains('reptile')) {
+      return Icons.pets;
+    }
+    if (n.contains('fish') || n.contains('pez') || n.contains('pisces')) {
+      return Icons.water;
+    }
+    if (n.contains('mammal') || n.contains('mammalia') || n.contains('mamifer') || n.contains('mamífer')) {
+      return Icons.pets;
+    }
+    // flora
+    if (n.contains('fungi') || n.contains('hongo') || n.contains('hong')) {
+      return Icons.spa;
+    }
+    if (n.contains('flora') || n.contains('plant') || n.contains('planta') || n.contains('plantae')) {
+      return Icons.eco;
+    }
+
+    return _taxonomyFocus == 'flora' ? Icons.eco : Icons.pets;
+  }
+
+  Widget _markerIconWidget(MapMarkerData m, {double size = 22, Color color = Colors.blueAccent}) {
+    final group = (m.groupName ?? '').trim();
+    final normalizedGroup = _normalizeKey(group);
+    final emoji = _taxonomyEmojiForKey(normalizedGroup);
+    if (emoji != null) {
+      return Text(emoji, style: TextStyle(fontSize: size, height: 1, color: color));
+    }
+    if (normalizedGroup.contains('fungi') || normalizedGroup.contains('hongo') || normalizedGroup.contains('hong')) {
+      return Text('🍄', style: TextStyle(fontSize: size, height: 1, color: color));
+    }
+    return Icon(_iconForMarker(m), size: size, color: color);
+  }
+
+  Widget _buildSourceFilterButton({
+    required String label,
+    required bool isSelected,
+    required Color accentColor,
+    required int count,
+    required VoidCallback onTap,
+  }) {
+    final isAll = label.toLowerCase() == 'todos';
+    final backgroundColor = isSelected
+        ? (isAll
+              ? accentColor.withValues(alpha: _isDarkMode ? 0.30 : 0.14)
+              : accentColor.withValues(alpha: _isDarkMode ? 0.32 : 0.16))
+        : Colors.transparent;
+    final labelColor = isSelected
+        ? (isAll ? Colors.white : Colors.white)
+      : (_isDarkMode ? Colors.white.withValues(alpha: 0.72) : Colors.black54);
+    final dotColor = isSelected
+        ? Colors.white.withValues(alpha: 0.95)
+        : accentColor;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeInOutCubicEmphasized,
+          constraints: const BoxConstraints(minHeight: 56),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isSelected
+                  ? accentColor.withValues(alpha: isAll ? 0.18 : 0.28)
+                  : (_isDarkMode
+                      ? Colors.white.withValues(alpha: 0.06)
+                      : Colors.black.withValues(alpha: 0.04)),
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: accentColor.withValues(alpha: _isDarkMode ? 0.16 : 0.08),
+                      blurRadius: 14,
+                      offset: const Offset(0, 6),
+                    ),
+                  ]
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: _isDarkMode ? 0.08 : 0.025),
+                      blurRadius: 9,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: dotColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.center,
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        textAlign: TextAlign.center,
+                        overflow: TextOverflow.visible,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.12,
+                          color: labelColor,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeInOutCubicEmphasized,
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? Colors.white.withValues(alpha: 0.14)
+                      : (_isDarkMode
+                          ? Colors.white.withValues(alpha: 0.08)
+                          : Colors.black.withValues(alpha: 0.05)),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '$count',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: isSelected
+                        ? Colors.white
+                        : (_isDarkMode ? Colors.white70 : Colors.black54),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _formatObservationDate(DateTime? date) {
+    if (date == null) return '';
+    const months = [
+      'ene',
+      'feb',
+      'mar',
+      'abr',
+      'may',
+      'jun',
+      'jul',
+      'ago',
+      'sep',
+      'oct',
+      'nov',
+      'dic',
+    ];
+    final monthIndex = date.month.clamp(1, 12) - 1;
+    final month = months[monthIndex];
+    return '${date.day} $month ${date.year}';
+  }
+
+  String _formatObservationLocation(LatLng position) {
+    final lat = position.latitude.toStringAsFixed(2);
+    final lng = position.longitude.toStringAsFixed(2);
+    return '$lat, $lng';
+  }
+
+  String _placeCacheKey(LatLng position) {
+    return '${position.latitude.toStringAsFixed(5)},${position.longitude.toStringAsFixed(5)}';
+  }
+
+  Future<String?> _resolveObservationPlaceName(LatLng position) async {
+    final cacheKey = _placeCacheKey(position);
+    final cachedFuture = _placeNameFutureCache[cacheKey];
+    if (cachedFuture != null) {
+      return cachedFuture;
+    }
+
+    final future = () async {
+      try {
+        final uri = Uri.https('nominatim.openstreetmap.org', '/reverse', {
+          'format': 'jsonv2',
+          'lat': position.latitude.toString(),
+          'lon': position.longitude.toString(),
+          'zoom': '14',
+          'addressdetails': '1',
+        });
+
+        final response = await http.get(
+          uri,
+          headers: const {
+            'Accept': 'application/json',
+            'User-Agent': 'soy_conservacion/1.0 (Flutter)',
+          },
+        );
+
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          return null;
+        }
+
+        final decoded = jsonDecode(response.body);
+        if (decoded is! Map<String, dynamic>) {
+          return null;
+        }
+
+        final address = decoded['address'];
+        final addressMap = address is Map<String, dynamic> ? address : null;
+        final displayName = decoded['display_name']?.toString().trim();
+
+        String? pickAddressValue(List<String> keys) {
+          for (final key in keys) {
+            final value = addressMap?[key]?.toString().trim();
+            if (value != null && value.isNotEmpty) {
+              return value;
+            }
+          }
+          return null;
+        }
+
+        final locality = pickAddressValue([
+          'neighbourhood',
+          'suburb',
+          'quarter',
+          'city_district',
+          'village',
+          'town',
+          'city',
+          'municipality',
+          'county',
+        ]);
+        if (locality != null) {
+          return locality;
+        }
+
+        if (displayName != null && displayName.isNotEmpty) {
+          final shortParts = displayName.split(',').map((part) => part.trim()).where((part) => part.isNotEmpty).toList();
+          if (shortParts.isNotEmpty) return shortParts.first;
+        }
+
+        return null;
+      } catch (_) {
+        return null;
+      }
+    }();
+
+    _placeNameFutureCache[cacheKey] = future;
+    return future;
+  }
+
+  IconData _iconForGroup(String group) {
+    final n = _normalizeKey(group);
+    if (n.contains('insect') || n.contains('insecta')) return Icons.bug_report;
+    if (n.contains('aves') || n.contains('ave') || n.contains('bird')) return Icons.flutter_dash;
+    if (n.contains('anfib') || n.contains('amphib') || n.contains('amphibia')) return Icons.water_drop;
+    if (n.contains('reptil') || n.contains('reptilia') || n.contains('reptile') || n.contains('lizard')) return Icons.pets;
+    if (n.contains('fish') || n.contains('pez') || n.contains('pisces')) return Icons.water;
+    if (n.contains('mammal') || n.contains('mammalia') || n.contains('mamif') || n.contains('mamífer')) return Icons.pets;
+    if (n.contains('animal') || n.contains('animalia')) return Icons.pets;
+    if (n.contains('fungi') || n.contains('hongo') || n.contains('hong')) return Icons.spa;
+    if (n.contains('flora') || n.contains('plant') || n.contains('planta') || n.contains('plantae')) return Icons.eco;
+    return _taxonomyFocus == 'flora' ? Icons.eco : Icons.pets;
+  }
+
+  String? _taxonomyEmojiForKey(String normalizedKey) {
+    if (normalizedKey.contains('arbol') || normalizedKey.contains('tree') || normalizedKey.contains('forest') || normalizedKey.contains('bosque')) {
+      return '🌳';
+    }
+    if (normalizedKey.contains('flor') || normalizedKey.contains('flower')) {
+      return '🌸';
+    }
+    if (normalizedKey.contains('cactus')) {
+      return '🌵';
+    }
+    if (normalizedKey.contains('helecho') || normalizedKey.contains('fern')) {
+      return '🌿';
+    }
+    if (normalizedKey.contains('hierba') || normalizedKey.contains('grass') || normalizedKey.contains('grama') || normalizedKey.contains('herb')) {
+      return '🌱';
+    }
+    if (normalizedKey.contains('planta') || normalizedKey.contains('plant') || normalizedKey.contains('flora') || normalizedKey.contains('plantae')) {
+      return '🪴';
+    }
+    if (normalizedKey.contains('insect') || normalizedKey.contains('insecta') || normalizedKey.contains('coleoptera') || normalizedKey.contains('hymenoptera')) {
+      return '🐞';
+    }
+    if (normalizedKey.contains('aves') || normalizedKey.contains('ave') || normalizedKey.contains('bird')) {
+      return '🐦';
+    }
+    if (normalizedKey.contains('anfib') || normalizedKey.contains('amphib') || normalizedKey.contains('amphibia')) {
+      return '🐸';
+    }
+    if (normalizedKey.contains('reptil') || normalizedKey.contains('reptilia') || normalizedKey.contains('lizard') || normalizedKey.contains('reptile')) {
+      return '🦎';
+    }
+    if (normalizedKey.contains('fish') || normalizedKey.contains('pez') || normalizedKey.contains('pisces')) {
+      return '🐟';
+    }
+    if (normalizedKey.contains('mammal') || normalizedKey.contains('mammalia') || normalizedKey.contains('mamifer') || normalizedKey.contains('mamífer')) {
+      return '🐾';
+    }
+    if (normalizedKey.contains('animal') || normalizedKey.contains('animalia')) {
+      return '🐾';
+    }
+    if (normalizedKey.contains('fungi') || normalizedKey.contains('hongo') || normalizedKey.contains('hong')) {
+      return '🍄';
+    }
+    return null;
+  }
+
+  Widget _groupIconWidget(String group, {double size = 16, Color color = Colors.blueAccent}) {
+    final n = _normalizeKey(group);
+    final emoji = _taxonomyEmojiForKey(n);
+    if (emoji != null) {
+      return Text(emoji, style: TextStyle(fontSize: size + 2, height: 1, color: color));
+    }
+    return Icon(_iconForGroup(group), size: size, color: color);
+  }
+
+  String _normalizeKey(String value) {
+    final normalized = value.trim().toLowerCase();
+    return normalized
+        .replaceAll('á', 'a')
+        .replaceAll('à', 'a')
+        .replaceAll('ä', 'a')
+        .replaceAll('â', 'a')
+        .replaceAll('é', 'e')
+        .replaceAll('è', 'e')
+        .replaceAll('ë', 'e')
+        .replaceAll('ê', 'e')
+        .replaceAll('í', 'i')
+        .replaceAll('ì', 'i')
+        .replaceAll('ï', 'i')
+        .replaceAll('î', 'i')
+        .replaceAll('ó', 'o')
+        .replaceAll('ò', 'o')
+        .replaceAll('ö', 'o')
+        .replaceAll('ô', 'o')
+        .replaceAll('ú', 'u')
+        .replaceAll('ù', 'u')
+        .replaceAll('ü', 'u')
+        .replaceAll('û', 'u')
+        .replaceAll('ñ', 'n');
+  }
+
+  /// Determina si una especie es FLORA (plantas y hongos solamente)
+  /// Puede usarse para filtrar listas de especies
   bool _isFloraSpecies(Species species) {
     final text =
         '${species.kingdom ?? ''} ${species.category ?? ''} ${species.scientificName ?? ''} ${species.name}'
             .toLowerCase();
-    return text.contains('plantae') ||
-        text.contains('planta') ||
-        text.contains('fungi') ||
-        text.contains('hong') ||
-        text.contains('hongo');
+    final normalized = _normalizeKey(text);
+    
+    // Flora: plantas y hongos
+    return normalized.contains('plantae') ||
+        normalized.contains('planta') ||
+        normalized.contains('fungi') ||
+        normalized.contains('hong') ||
+        normalized.contains('hongo');
   }
 
-  bool _isFaunaSpecies(Species species) => !_isFloraSpecies(species);
-
-  String _markerSourceType(String? sourceUrl) {
-    final normalized = sourceUrl?.toLowerCase() ?? '';
-    if (normalized.contains('inaturalist')) {
-      return 'inaturalist';
-    }
-    return 'odk';
+  /// Determina si una especie es FAUNA (animales solamente)
+  /// Puede usarse para filtrar listas de especies
+  // ignore: unused_element
+  bool _isFaunaSpecies(Species species) {
+    final text =
+        '${species.kingdom ?? ''} ${species.category ?? ''} ${species.scientificName ?? ''} ${species.name}'
+            .toLowerCase();
+    final normalized = _normalizeKey(text);
+    
+    // Fauna: solo animales específicos (excluir plantas y hongos)
+    final isAnimal = 
+        normalized.contains('insect') ||
+        normalized.contains('insecta') ||
+        normalized.contains('coleoptera') ||
+        normalized.contains('hymenoptera') ||
+        normalized.contains('aves') ||
+        normalized.contains('ave') ||
+        normalized.contains('bird') ||
+        normalized.contains('anfib') ||
+        normalized.contains('amphib') ||
+        normalized.contains('amphibia') ||
+        normalized.contains('reptil') ||
+        normalized.contains('reptilia') ||
+        normalized.contains('lizard') ||
+        normalized.contains('reptile') ||
+        normalized.contains('fish') ||
+        normalized.contains('pez') ||
+        normalized.contains('pisces') ||
+        normalized.contains('mammal') ||
+        normalized.contains('mammalia') ||
+        normalized.contains('mamif') ||
+        normalized.contains('mamifer') ||
+        normalized.contains('animal') ||
+        normalized.contains('animalia');
+    
+    // Es fauna si es un animal específico Y NO es flora
+    return isAnimal && !_isFloraSpecies(species);
   }
 
-  bool _markerMatchesSelectedGroup(MapMarkerData marker, String selectedGroup) {
-    final candidate = (marker.groupName ?? '').trim().toLowerCase();
-    if (candidate.isEmpty) {
-      return false;
-    }
-
-    final normalizedSelected = selectedGroup.trim().toLowerCase();
-    return candidate == normalizedSelected;
-  }
-
-  Widget _buildMapLayerSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 16, top: 8, bottom: 12),
-          child: Text(
-            _t('mapLayers'),
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              color: _isDarkMode ? Colors.white38 : Colors.black38,
-              letterSpacing: 1.1,
-            ),
-          ),
-        ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            _buildLayerOption(_t('base'), 'outdoors-v12', LucideIcons.map),
-            _buildLayerOption(_t('years'), 'light-v11', LucideIcons.calendar),
-            _buildLayerOption(
-              _t('satellite'),
-              'satellite-streets-v12',
-              LucideIcons.layers,
-            ),
-            _buildLayerOption(_t('dark'), 'dark-v11', LucideIcons.moon),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLayerOption(String label, String style, IconData icon) {
-    bool isSelected = _mapStyle == style;
+  Widget _buildLayerOption({
+    required String label,
+    required String style,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    final isSelected = _mapStyle == style;
     return GestureDetector(
-      onTap: () {
-        setState(() {
-          _mapStyle = style;
-        });
-      },
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
+      onTap: onTap,
+      child: AnimatedScale(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        scale: isSelected ? 1.03 : 1.0,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 7),
+          height: 82,
+          decoration: BoxDecoration(
+            color: isSelected
+                ? Colors.blueAccent.withValues(alpha: 0.10)
+                : (_isDarkMode
+                      ? Colors.white.withValues(alpha: 0.05)
+                      : const Color(0xFFF0F2F5)),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
               color: isSelected
-                  ? Colors.blueAccent.withValues(alpha: 0.15)
-                  : (_isDarkMode
-                        ? Colors.white.withValues(alpha: 0.05)
-                        : const Color(0xFFF0F2F5)),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isSelected ? Colors.blueAccent : Colors.transparent,
-                width: 2,
+                  ? Colors.blueAccent.withValues(alpha: 0.85)
+                  : Colors.transparent,
+              width: 1.25,
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: Colors.blueAccent.withValues(alpha: 0.10),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Stack(
+            children: [
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? Colors.blueAccent.withValues(alpha: 0.14)
+                            : (_isDarkMode
+                                  ? Colors.white.withValues(alpha: 0.06)
+                                  : Colors.white),
+                        borderRadius: BorderRadius.circular(11),
+                      ),
+                      alignment: Alignment.center,
+                      child: Icon(
+                        icon,
+                        size: 19,
+                        color: isSelected
+                            ? Colors.blueAccent
+                            : (_isDarkMode ? Colors.white54 : Colors.black54),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      label,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight:
+                            isSelected ? FontWeight.w700 : FontWeight.w500,
+                        color: isSelected
+                            ? Colors.blueAccent
+                            : (_isDarkMode ? Colors.white70 : Colors.black87),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            child: Icon(
-              icon,
-              color: isSelected
-                  ? Colors.blueAccent
-                  : (_isDarkMode ? Colors.white54 : Colors.black54),
-            ),
+              Positioned(
+                top: 0,
+                right: 0,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 160),
+                  curve: Curves.easeOut,
+                  opacity: isSelected ? 1.0 : 0.0,
+                  child: AnimatedScale(
+                    duration: const Duration(milliseconds: 160),
+                    curve: Curves.easeOutBack,
+                    scale: isSelected ? 1.0 : 0.7,
+                    child: Container(
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        color: Colors.blueAccent,
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: _isDarkMode
+                              ? const Color(0xFF171717)
+                              : Colors.white,
+                          width: 1.5,
+                        ),
+                      ),
+                      child: const Icon(
+                        LucideIcons.check,
+                        size: 10,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 6),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              color: isSelected
-                  ? Colors.blueAccent
-                  : (_isDarkMode ? Colors.white70 : Colors.black87),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1317,239 +2784,80 @@ class _MainScreenState extends State<MainScreen>
     Color? iconColor,
     VoidCallback? onTap,
   }) {
-    return ListTile(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      leading: Icon(
-        icon,
-        color: iconColor ?? (isDark ? Colors.white70 : Colors.black87),
-        size: 22,
-      ),
-      title: Text(
-        title,
-        style: TextStyle(
-          fontSize: 15,
-          fontWeight: FontWeight.w500,
-          color: textColor ?? (isDark ? Colors.white : Colors.black87),
+    // Diseño compacto y premium estilo Apple
+    final defaultTextColor = textColor ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    final defaultIconColor = iconColor ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          splashColor: const Color(0xFF4A90E2).withValues(alpha: 0.08),
+          highlightColor: const Color(0xFF4A90E2).withValues(alpha: 0.04),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.04)
+                  : Colors.black.withValues(alpha: 0.02),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Icono compacto
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.08)
+                        : const Color(0xFFF5F5F7),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Center(
+                    child: Icon(
+                      icon,
+                      color: defaultIconColor,
+                      size: 20,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Título
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: defaultTextColor,
+                      letterSpacing: -0.1,
+                    ),
+                  ),
+                ),
+                // Widget trailing
+                if (trailing != null) ...[
+                  const SizedBox(width: 8),
+                  DefaultTextStyle.merge(
+                    style: TextStyle(
+                      color: isDark
+                          ? Colors.white.withValues(alpha: 0.7)
+                          : Colors.black.withValues(alpha: 0.6),
+                      fontWeight: FontWeight.w600,
+                    ),
+                    child: trailing,
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
-      trailing: trailing,
-      onTap: onTap,
     );
   }
 
-  Widget _buildBackendSummaryCard({bool compact = false}) {
-    return Consumer4<
-      BackendStatusProvider,
-      SpeciesProvider,
-      ObservationsProvider,
-      MapProvider
-    >(
-      builder:
-          (
-            context,
-            backendStatus,
-            speciesProvider,
-            observationsProvider,
-            mapProvider,
-            child,
-          ) {
-            final backgroundColor = _isDarkMode
-                ? Colors.black.withValues(alpha: 0.75)
-                : Colors.white.withValues(alpha: 0.92);
-            final borderColor =
-                backendStatus.state == BackendConnectionState.online
-                ? Colors.greenAccent.withValues(alpha: 0.45)
-                : backendStatus.state == BackendConnectionState.degraded
-                ? Colors.orangeAccent.withValues(alpha: 0.45)
-                : Colors.blueAccent.withValues(alpha: 0.25);
-
-            final card = Container(
-              padding: EdgeInsets.all(compact ? 14 : 16),
-              decoration: BoxDecoration(
-                color: backgroundColor,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: borderColor, width: 1),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    blurRadius: 18,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color:
-                              backendStatus.state ==
-                                  BackendConnectionState.online
-                              ? Colors.green
-                              : backendStatus.state ==
-                                    BackendConnectionState.degraded
-                              ? Colors.orange
-                              : backendStatus.state ==
-                                    BackendConnectionState.checking
-                              ? Colors.blue
-                              : Colors.redAccent,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Backend ${backendStatus.environmentLabel}',
-                          style: TextStyle(
-                            fontSize: compact ? 12 : 13,
-                            fontWeight: FontWeight.w700,
-                            color: _isDarkMode ? Colors.white : Colors.black87,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        icon: backendStatus.isBusy
-                            ? SizedBox(
-                                width: compact ? 16 : 18,
-                                height: compact ? 16 : 18,
-                                child: const CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : Icon(
-                                LucideIcons.refreshCw,
-                                size: compact ? 16 : 18,
-                                color: _isDarkMode
-                                    ? Colors.white70
-                                    : Colors.black54,
-                              ),
-                        onPressed: backendStatus.isBusy
-                            ? null
-                            : () {
-                                context
-                                    .read<BackendStatusProvider>()
-                                    .checkBackend();
-                                context.read<SpeciesProvider>().refresh();
-                                context.read<ObservationsProvider>().refresh();
-                                context.read<MapProvider>().refresh();
-                              },
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    backendStatus.baseUri.toString(),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: compact ? 11 : 12,
-                      color: _isDarkMode ? Colors.white70 : Colors.black54,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildMiniStat(
-                          'Species',
-                          speciesProvider.items.length.toString(),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildMiniStat(
-                          'Obs.',
-                          observationsProvider.items.length.toString(),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildMiniStat(
-                          'Map',
-                          (mapProvider.snapshot?.markers.length ?? 0)
-                              .toString(),
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (!compact) ...[
-                    const SizedBox(height: 10),
-                    Text(
-                      backendStatus.message ?? 'Sin comprobación reciente',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: _isDarkMode ? Colors.white54 : Colors.black54,
-                      ),
-                    ),
-                  ],
-                  if (speciesProvider.errorMessage != null ||
-                      observationsProvider.errorMessage != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      speciesProvider.errorMessage ??
-                          observationsProvider.errorMessage ??
-                          '',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: Colors.redAccent,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            );
-
-            if (compact) {
-              return card;
-            }
-
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: card,
-            );
-          },
-    );
-  }
-
-  Widget _buildMiniStat(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: _isDarkMode
-            ? Colors.white.withValues(alpha: 0.05)
-            : const Color(0xFFF5F7FA),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color: _isDarkMode ? Colors.white : Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10,
-              color: _isDarkMode ? Colors.white54 : Colors.black54,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }

@@ -161,7 +161,7 @@ abstract class AppLocalizations {
   /// No description provided for @layerYears.
   ///
   /// In es, this message translates to:
-  /// **'Años'**
+  /// **'Claro'**
   String get layerYears;
 
   /// No description provided for @layerSatellite.
