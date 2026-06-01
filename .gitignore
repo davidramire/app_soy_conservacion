@@ -47,3 +47,11 @@ app.*.map.json
 # Secret files
 .env
 .env.local
+
+# Node.js
+node_modules/
+**/node_modules/
+
+# PNPM
+.pnpm-store/
+.pnpm/

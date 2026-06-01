@@ -1,5 +1,6 @@
 import 'package:latlong2/latlong.dart';
 
+import 'json_parsing.dart';
 import 'observation.dart';
 
 class MapMarkerData {
@@ -13,6 +14,7 @@ class MapMarkerData {
     this.sourceType,
     this.groupName,
     this.speciesId,
+    this.observedAt,
   });
 
   final String id;
@@ -24,6 +26,7 @@ class MapMarkerData {
   final String? sourceType;
   final String? groupName;
   final String? speciesId;
+  final DateTime? observedAt;
 
   String get resolvedSourceType {
     final normalized = sourceType?.toLowerCase() ?? sourceUrl?.toLowerCase() ?? '';
@@ -42,6 +45,7 @@ class MapMarkerData {
       imageUrl: observation.imageUrl,
       sourceUrl: observation.sourceUrl,
       sourceType: 'odk',
+      observedAt: observation.observedAt,
     );
   }
 }
@@ -99,6 +103,7 @@ class MapSnapshot {
             sourceType: data['sourceType']?.toString() ?? data['source_type']?.toString(),
             groupName: data['groupName']?.toString() ?? data['group_name']?.toString(),
             speciesId: data['speciesId']?.toString() ?? data['species_id']?.toString(),
+            observedAt: readDateTime(data, ['observedAt', 'observed_at', 'createdAt', 'created_at']),
           );
         }).toList();
 

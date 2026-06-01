@@ -6,6 +6,7 @@ import { healthRouter } from './routes/health.js';
 import { speciesRouter } from './routes/species.js';
 import { observationsRouter } from './routes/observations.js';
 import { mapRouter } from './routes/map.js';
+import { analyticsRouter } from './routes/analytics.js';
 import { usersRouter } from './routes/users.js';
 import { authRouter } from './routes/auth.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
@@ -41,6 +42,7 @@ app.use('/health', healthRouter);
 app.use('/species', speciesRouter);
 app.use('/observations', observationsRouter);
 app.use('/map', mapRouter);
+app.use('/analytics', analyticsRouter);
 app.use('/users', usersRouter);
 app.use('/auth', authRouter);
 

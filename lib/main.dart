@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' as rendering;
 import 'package:flutter/foundation.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 // import 'package:flutter_gen/gen_l10n/app_localizations.dart'; // Se activará tras el primer build
 import 'package:http/http.dart' as http;
 import 'package:lucide_icons/lucide_icons.dart';
@@ -12,6 +13,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'config/app_config.dart';
 import 'core/network/api_client.dart';
@@ -20,19 +22,26 @@ import 'core/storage/secure_token_storage.dart';
 import 'models/map_snapshot.dart';
 import 'models/species.dart';
 import 'providers/backend_status_provider.dart';
+import 'providers/filter_provider.dart';
 import 'providers/map_provider.dart';
 import 'providers/observations_provider.dart';
 import 'providers/species_provider.dart';
+import 'providers/theme_provider.dart';
 import 'repositories/auth_repository.dart';
 import 'repositories/map_repository.dart';
 import 'repositories/observations_repository.dart';
 import 'repositories/species_repository.dart';
 import 'repositories/users_repository.dart';
+import 'screens/analysis_screen.dart';
+import 'services/analytics_service.dart';
 import 'services/auth_service.dart';
 import 'services/map_service.dart';
 import 'services/observations_service.dart';
 import 'services/species_service.dart';
 import 'services/users_service.dart';
+import 'theme/app_theme.dart';
+import 'utils/marker_filters.dart';
+import 'widgets/date_filter_panel.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,7 +63,8 @@ void main() async {
     }
   }
   await dotenv.load(fileName: ".env.local");
-  runApp(const MiApp());
+  final preferences = await SharedPreferences.getInstance();
+  runApp(MiApp(preferences: preferences));
 }
 
 class SplashScreen extends StatefulWidget {
@@ -124,7 +134,9 @@ class _SplashScreenState extends State<SplashScreen> {
 }
 
 class MiApp extends StatelessWidget {
-  const MiApp({super.key});
+  const MiApp({super.key, required this.preferences});
+
+  final SharedPreferences preferences;
 
   @override
   Widget build(BuildContext context) {
@@ -133,6 +145,13 @@ class MiApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         Provider<AppConfig>.value(value: appConfig),
+        Provider<SharedPreferences>.value(value: preferences),
+        ChangeNotifierProvider<ThemeProvider>(
+          create: (context) => ThemeProvider(context.read<SharedPreferences>()),
+        ),
+        ChangeNotifierProvider<FilterProvider>(
+          create: (context) => FilterProvider(context.read<SharedPreferences>()),
+        ),
         Provider<SecureTokenStorage>(create: (_) => const SecureTokenStorage()),
         Provider<LocalCacheService>(create: (_) => const LocalCacheService()),
         Provider<ApiClient>(
@@ -149,6 +168,9 @@ class MiApp extends StatelessWidget {
         ),
         Provider<MapService>(
           create: (context) => MapService(apiClient: context.read<ApiClient>()),
+        ),
+        Provider<AnalyticsService>(
+          create: (context) => AnalyticsService(apiClient: context.read<ApiClient>()),
         ),
         Provider<UsersService>(
           create: (context) => UsersService(apiClient: context.read<ApiClient>()),
@@ -203,10 +225,19 @@ class MiApp extends StatelessWidget {
           ),
         ),
       ],
-      child: MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(brightness: Brightness.light, fontFamily: 'Poppins'),
-        home: const SplashScreen(),
+      child: Consumer<ThemeProvider>(
+        builder: (context, themeProvider, _) {
+          return MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.light,
+            darkTheme: AppTheme.dark,
+            themeMode: themeProvider.themeMode,
+            locale: const Locale('es'),
+            supportedLocales: const [Locale('es'), Locale('en')],
+            localizationsDelegates: GlobalMaterialLocalizations.delegates,
+            home: const SplashScreen(),
+          );
+        },
       ),
     );
   }
@@ -222,10 +253,10 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen>
     with SingleTickerProviderStateMixin {
-  bool _isDarkMode = false;
   String _currentLanguage = 'es';
   String _mapStyle = 'outdoors-v12';
   String _taxonomyFocus = 'fauna';
+  int _selectedBottomIndex = 0;
   String? _activeTaxonomyGroup;
   final MapController _mapController = MapController();
   final Map<String, Future<String?>> _placeNameFutureCache = {};
@@ -252,6 +283,7 @@ class _MainScreenState extends State<MainScreen>
       'flora': 'Flora',
       'date': 'Fecha',
       'analysis': 'Análisis',
+      'version': 'Versión',
     },
     'en': {
       'appTitle': 'Biodiversity Viewer',
@@ -278,11 +310,11 @@ class _MainScreenState extends State<MainScreen>
   };
 
   String _t(String key) {
-    debugPrint('Traduciendo: $key para idioma: $_currentLanguage');
     final result = _texts[_currentLanguage]?[key] ?? _texts['es']?[key] ?? key;
-    debugPrint('Resultado: $result');
     return result;
   }
+
+  bool get _isDarkMode => context.watch<ThemeProvider>().isDarkMode;
 
   @override
   void initState() {
@@ -295,15 +327,30 @@ class _MainScreenState extends State<MainScreen>
       reverseDuration: const Duration(milliseconds: 800),
     );
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) {
         return;
       }
 
+      final filterProvider = context.read<FilterProvider>();
+
       context.read<BackendStatusProvider>().checkBackend();
       context.read<SpeciesProvider>().loadSpecies();
       context.read<ObservationsProvider>().loadObservations();
-      context.read<MapProvider>().loadSnapshot();
+
+      try {
+        final bounds = await context.read<AnalyticsService>().fetchDateBounds();
+        filterProvider.setDateBounds(
+          minDate: bounds.minDate,
+          maxDate: bounds.maxDate,
+        );
+      } catch (_) {
+        filterProvider.setDateBounds(maxDate: DateTime.now());
+      }
+
+      await context.read<MapProvider>().loadSnapshot(
+            dateRange: filterProvider.effectiveDateRange,
+          );
     });
   }
 
@@ -602,9 +649,7 @@ class _MainScreenState extends State<MainScreen>
                                               value: _isDarkMode,
                                               activeColor: const Color(0xFF4A90E2),
                                               onChanged: (value) {
-                                                setState(() {
-                                                  _isDarkMode = value;
-                                                });
+                                                context.read<ThemeProvider>().setDarkMode(value);
                                               },
                                             ),
                                           ),
@@ -706,16 +751,17 @@ class _MainScreenState extends State<MainScreen>
           );
         },
       ),
-      body: Consumer2<SpeciesProvider, MapProvider>(
-        builder: (context, speciesProvider, mapProvider, child) {
+      body: Consumer3<SpeciesProvider, MapProvider, FilterProvider>(
+        builder: (context, speciesProvider, mapProvider, filterProvider, child) {
           final snapshot = mapProvider.snapshot;
           final markers = snapshot?.markers ?? const <MapMarkerData>[];
           final mapCenter = snapshot?.center ?? const LatLng(4.5709, -74.2973);
           final mapZoom = snapshot?.zoom ?? 4.0;
           final isCompactLayout = MediaQuery.of(context).size.width < 760;
           final bottomInset = MediaQuery.of(context).padding.bottom;
+          final filteredMarkers = applyMapFilters(markers, filterProvider);
           final visibleMarkers = _visibleMarkersForTaxonomy(
-            markers,
+            filteredMarkers,
             speciesProvider.items,
           );
 
@@ -811,9 +857,19 @@ class _MainScreenState extends State<MainScreen>
           selectedFontSize: 12,
           unselectedFontSize: 12,
           items: navItems,
-          currentIndex: _taxonomyFocus == 'flora' ? 1 : 0,
+          currentIndex: _selectedBottomIndex,
           onTap: (index) {
+            if (index == 3) {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const AnalysisScreen(),
+                ),
+              );
+              return;
+            }
+
             setState(() {
+              _selectedBottomIndex = index;
               if (index == 0) {
                 _taxonomyFocus = 'fauna';
                 _activeTaxonomyGroup = null;
@@ -822,8 +878,12 @@ class _MainScreenState extends State<MainScreen>
                 _activeTaxonomyGroup = null;
               }
             });
-            // mostrar panel de selección de grupo para el foco actual
-            Future.microtask(() => _showTaxonomyPanel(context));
+
+            if (index == 0 || index == 1) {
+              Future.microtask(() => _showTaxonomyPanel(context));
+            } else if (index == 2) {
+              Future.microtask(() => _showDateFilterPanel(context));
+            }
           },
         ),
       ),
@@ -1118,6 +1178,37 @@ class _MainScreenState extends State<MainScreen>
     return filtered;
   }
 
+  void _showDateFilterPanel(BuildContext context) {
+    final mapProvider = context.read<MapProvider>();
+    final markers = mapProvider.snapshot?.markers ?? const <MapMarkerData>[];
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
+          ),
+          child: DateFilterPanel(
+            markers: markers,
+            onClose: () => Navigator.of(sheetContext).pop(),
+            onApply: () {
+              final filters = context.read<FilterProvider>();
+              context.read<MapProvider>().refresh(
+                    dateRange: filters.effectiveDateRange,
+                  );
+              if (mounted) {
+                setState(() {});
+              }
+            },
+          ),
+        );
+      },
+    );
+  }
+
   void _showTaxonomyPanel(BuildContext context) {
     final mapProvider = context.read<MapProvider>();
     final allMarkers = mapProvider.snapshot?.markers ?? const <MapMarkerData>[];
@@ -1344,7 +1435,7 @@ class _MainScreenState extends State<MainScreen>
                           padding: const EdgeInsets.fromLTRB(2, 8, 2, 6),
                           physics: const BouncingScrollPhysics(),
                           itemCount: groups.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          separatorBuilder: (_, _) => const SizedBox(height: 10),
                           itemBuilder: (c, i) {
                             final g = groups[i];
                             final counts = countsBySource[g] ?? {};
@@ -1770,7 +1861,7 @@ class _MainScreenState extends State<MainScreen>
                         : ListView.separated(
                             padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
                             itemCount: items.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 10),
+                            separatorBuilder: (_, _) => const SizedBox(height: 10),
                             itemBuilder: (c, i) {
                               final m = items[i];
                               final sourceType = m.resolvedSourceType;
