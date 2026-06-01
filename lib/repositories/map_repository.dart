@@ -17,7 +17,7 @@ class MapRepository {
   Future<MapSnapshot> loadMapSnapshot({bool refresh = false}) async {
     if (!refresh) {
       final cached = await loadCachedSnapshot();
-      if (cached != null) {
+      if (cached != null && cached.markers.isNotEmpty) {
         return cached;
       }
     }
