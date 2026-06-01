@@ -6,10 +6,16 @@ class MapService {
 
   final ApiClient apiClient;
 
-  Future<MapSnapshot> fetchMapSnapshot({int limit = 5000}) async {
+  Future<MapSnapshot> fetchMapSnapshot({
+    int limit = 5000,
+    Map<String, String>? queryParameters,
+  }) async {
     final payload = await apiClient.getJson(
       '/map',
-      queryParameters: {'limit': '$limit'},
+      queryParameters: {
+        'limit': '$limit',
+        ...?queryParameters,
+      },
     );
 
     return MapSnapshot.fromJson(payload);

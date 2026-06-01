@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { averageCoordinates } from '../utils/http.js';
+import { buildDateFilter } from '../utils/date-filters.js';
 
 export const mapRouter = Router();
 
@@ -10,11 +11,13 @@ mapRouter.get(
   '/',
   asyncHandler(async (request, response) => {
     const limit = Math.min(Math.max(Number(request.query.limit ?? 5000), 1), 10000);
+    const dateFilter = buildDateFilter(request.query.dateFrom, request.query.dateTo);
     const [observations, inaturalistObservations] = await Promise.all([
       prisma.observacion.findMany({
         where: {
           latitud: { not: null },
           longitud: { not: null },
+          ...(dateFilter ? { fecha: dateFilter } : {}),
         },
         take: limit,
         orderBy: { fecha: 'desc' },
@@ -32,6 +35,7 @@ mapRouter.get(
         where: {
           latitud: { not: null },
           longitud: { not: null },
+          ...(dateFilter ? { fecha: dateFilter } : {}),
         },
         take: limit,
         orderBy: { fecha: 'desc' },
