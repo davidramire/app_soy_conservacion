@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+import 'package:soy_conservacion/config/brand_config.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -758,10 +760,10 @@ class _MainScreenState extends State<MainScreen>
                         .map(
                           (marker) => Marker(
                             point: marker.position,
-                            width: 48,
-                            height: 48,
-                            alignment: Alignment.center,
-                            child: _buildMapMarker(marker),
+                            width: 36, // Restauramos un poco el ancho
+                            height: 44, // Reducimos significativamente la altura para que la cola sea más corta
+                            alignment: Alignment.bottomCenter,
+                            child: _buildMapMarker(context, marker),
                           ),
                         )
                         .toList(),
@@ -1023,38 +1025,24 @@ class _MainScreenState extends State<MainScreen>
     );
   }
 
-  Widget _buildMapMarker(MapMarkerData marker) {
-    final source = marker.resolvedSourceType;
-    final color = source == 'inaturalist' ? Colors.green : Colors.blue;
-    return Stack(
-      alignment: Alignment.topCenter,
-      children: [
-        Icon(
-          LucideIcons.mapPin,
-          size: 44,
-          color: color.withValues(alpha: 0.96),
-        ),
-        Positioned(
-          top: 10,
-          child: Container(
-            width: 12,
-            height: 12,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              border: Border.all(color: color, width: 2),
-            ),
-          ),
-        ),
-        Positioned(
-          bottom: 1,
-          child: Icon(
-                            _taxonomyFocusIcon(),
-            size: 14,
-            color: color.withValues(alpha: 0.9),
-          ),
-        ),
-      ],
+  Widget _buildMapMarker(BuildContext context, MapMarkerData marker) {
+    final observedYear = marker.observedAt?.year;
+    final brand = BrandPersonality.resolve(
+      source: marker.resolvedSourceType,
+      year: observedYear,
+    );
+
+    return GestureDetector(
+      onTap: () {
+        _mapController.move(marker.position, 17.5);
+        _showObservationContextModal(context, marker);
+      },
+      behavior: HitTestBehavior.opaque,
+      child: CustomPaint(
+        // Proporción más chata (36x44) para acortar la parte inferior (la punta)
+        size: const Size(36, 44),
+        painter: _MapPinPainter(primary: brand.primary, dark: brand.dark),
+      ),
     );
   }
 
@@ -1694,8 +1682,8 @@ class _MainScreenState extends State<MainScreen>
                                         // Mostrar 'Flora' cuando el foco de taxonomía esté en flora,
                                         // 'Fauna' cuando sea un grupo animal en fauna, de lo contrario 'Grupo taxonómico'.
                                         _taxonomyFocus == 'flora'
-                                          ? 'Flora'
-                                          : (isAnimalGroup && _taxonomyFocus == 'fauna' ? 'Fauna' : 'Grupo taxonómico'),
+                                            ? 'Flora'
+                                            : (isAnimalGroup && _taxonomyFocus == 'fauna' ? 'Fauna' : 'Grupo taxonómico'),
                                       style: TextStyle(
                                         fontSize: 11,
                                         fontWeight: FontWeight.w700,
@@ -1715,7 +1703,7 @@ class _MainScreenState extends State<MainScreen>
                           onPressed: () => Navigator.of(ctx).pop(),
                           icon: Icon(
                             // Show a back arrow for the same-kind groups (fauna groups when in fauna,
-                            // and flora groups — including plants and fungi — when in flora). Otherwise show close.
+                            // and flora groups ÔÇö including plants and fungi ÔÇö when in flora). Otherwise show close.
                             ((_taxonomyFocus == 'fauna' && isAnimalGroup) ||
                                     (_taxonomyFocus == 'flora' && (normalized.contains('planta') || normalized.contains('plant') || normalized.contains('plantae') || normalized.contains('fungi') || normalized.contains('hongo') || normalized.contains('hong'))))
                                 ? Icons.arrow_back_rounded
@@ -1793,10 +1781,17 @@ class _MainScreenState extends State<MainScreen>
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(22),
                                   onTap: () {
-                                    _mapController.move(m.position, 14.5);
-                                    Future.delayed(const Duration(milliseconds: 220), () {
+                                    Navigator.popUntil(context, (route) => route.isFirst);
+                                    _mapController.move(m.position, 17.5);
+                                    Future.delayed(const Duration(milliseconds: 800), () {
                                       if (!mounted) return;
-                                      _showObservationContextModal(context, m);
+                                      _showObservationContextModal(
+                                        this.context,
+                                        m,
+                                        onReturnToList: () {
+                                          _showGroupList(this.context, group, markers, sourceFilter: sourceFilter);
+                                        },
+                                      );
                                     });
                                   },
                                   child: AnimatedContainer(
@@ -1958,11 +1953,18 @@ class _MainScreenState extends State<MainScreen>
                                                     child: InkWell(
                                                       borderRadius: BorderRadius.circular(8),
                                                       onTap: () {
-                                                        // Abrimos el detalle encima sin cerrar la lista
-                                                        _mapController.move(m.position, 14.5);
-                                                        Future.delayed(const Duration(milliseconds: 220), () {
+                                                        // Cerramos la lista para ir al mapa
+                                                        Navigator.popUntil(context, (route) => route.isFirst);
+                                                        _mapController.move(m.position, 17.5);
+                                                        Future.delayed(const Duration(milliseconds: 800), () {
                                                           if (!mounted) return;
-                                                          _showObservationContextModal(context, m);
+                                                          _showObservationContextModal(
+                                                            this.context,
+                                                            m,
+                                                            onReturnToList: () {
+                                                              _showGroupList(this.context, group, markers, sourceFilter: sourceFilter);
+                                                            },
+                                                          );
                                                         });
                                                       },
                                                       child: Container(
@@ -1998,7 +2000,7 @@ class _MainScreenState extends State<MainScreen>
     );
   }
 
-  void _showObservationContextModal(BuildContext context, MapMarkerData marker) {
+  void _showObservationContextModal(BuildContext context, MapMarkerData marker, {VoidCallback? onReturnToList}) {
     final sourceType = marker.resolvedSourceType;
     final sourceColor = sourceType == 'odk' ? Colors.orangeAccent : Colors.green;
 
@@ -2144,6 +2146,26 @@ class _MainScreenState extends State<MainScreen>
                   ],
                 ),
                 const SizedBox(height: 14),
+                if (onReturnToList != null)
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: sourceColor,
+                        side: BorderSide(color: sourceColor),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () {
+                        Navigator.of(sheetContext).pop();
+                        onReturnToList();
+                      },
+                      child: const Text('Volver a la lista', style: TextStyle(fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                if (onReturnToList != null) const SizedBox(height: 8),
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
@@ -2860,4 +2882,210 @@ class _MainScreenState extends State<MainScreen>
     );
   }
 
+}
+
+
+class _MapPinPainter extends CustomPainter {
+  const _MapPinPainter({required this.primary, required this.dark});
+
+  final Color primary;
+  final Color dark;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final cx = w / 2;
+
+    // Use original relative proportions (which are mathematically perfect)
+    // Because we use Size(36, 54), it will automatically be slender!
+    final r = w * 0.425;
+    final cy = r + h * 0.04;
+
+    final path = _pinPath(cx, cy, r, w, h);
+
+    // Se eliminó la sombra difusa externa a petición del usuario.
+
+    // 2. Relleno
+    canvas.drawPath(
+      path,
+      Paint()
+        ..shader = ui.Gradient.radial(
+          Offset(cx - r * 0.22, cy - r * 0.28),
+          r * 2.0,
+          [_lighten(primary, 0.20), primary, _darken(primary, 0.20)],
+          [0.0, 0.50, 1.0],
+        )
+        ..style = PaintingStyle.fill,
+    );
+
+    // 3. Brillo especular
+    final specPath = _specularPath(cx, cy, r);
+    canvas.drawPath(
+      specPath,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(cx, cy - r * 0.95),
+          Offset(cx, cy + r * 0.10),
+          [
+            Colors.white.withValues(alpha: 0.36),
+            Colors.white.withValues(alpha: 0.0),
+          ],
+        )
+        ..style = PaintingStyle.fill,
+    );
+
+    // 4. Inner stroke
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.20)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.75,
+    );
+
+    // 5. Anillo blanco
+    final ringR = r * 0.44;
+    final center = Offset(cx, cy);
+    canvas.drawCircle(
+      center,
+      ringR + 1.2,
+      Paint()
+        ..color = dark.withValues(alpha: 0.25)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.0),
+    );
+    canvas.drawCircle(center, ringR, Paint()..color = Colors.white);
+
+    // 6. Punto central
+    final dotR = ringR * 0.42;
+    canvas.drawCircle(
+      center,
+      dotR,
+      Paint()
+        ..shader = ui.Gradient.radial(
+          Offset(cx - dotR * 0.25, cy - dotR * 0.25),
+          dotR * 1.8,
+          [_lighten(primary, 0.18), _darken(primary, 0.12)],
+        )
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      Offset(cx - dotR * 0.30, cy - dotR * 0.30),
+      dotR * 0.30,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.50)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8),
+    );
+  }
+
+  ui.Path _pinPath(double cx, double cy, double r, double w, double h) {
+    // Elegant teardrop using standard bezier scaled to our cx, cy, r
+    final path = ui.Path();
+    final tipY = h * 0.96;
+    
+    final s = r / 8.0;
+    
+    double mapX(double x) => cx + (x - 12) * s;
+    double mapY(double y) {
+      if (y <= 10) {
+        return cy + (y - 10) * s;
+      } else {
+        // Smoothly stretch the bottom to reach tipY without bulging
+        final stretch = (tipY - cy) / 12.0;
+        return cy + (y - 10) * stretch;
+      }
+    }
+
+    path.moveTo(mapX(12), mapY(22));
+    path.cubicTo(
+      mapX(4), mapY(15.5),
+      mapX(4), mapY(10),
+      mapX(4), mapY(10),
+    );
+    path.arcToPoint(
+      Offset(mapX(20), mapY(10)),
+      radius: Radius.circular(r),
+      clockwise: true,
+    );
+    path.cubicTo(
+      mapX(20), mapY(15.5),
+      mapX(12), mapY(22),
+      mapX(12), mapY(22),
+    );
+    path.close();
+    return path;
+  }
+
+  ui.Path _specularPath(double cx, double cy, double r) {
+    const k = 0.5523;
+    final outerR = r * 0.88;
+    final innerR = r * 0.52;
+
+    final path = ui.Path();
+    final startAngle = 2.44; 
+    final endAngle   = 0.70; 
+
+    final sx = cx + outerR * _fcos(startAngle);
+    final sy = cy + outerR * _fsin(startAngle);
+    path.moveTo(sx, sy);
+
+    final topOuter = Offset(cx, cy - outerR);
+    path.cubicTo(
+      sx + outerR * k * 0.7,  sy - outerR * k * 0.5,
+      topOuter.dx - outerR * k * 0.5, topOuter.dy,
+      topOuter.dx, topOuter.dy,
+    );
+    final ex = cx + outerR * _fcos(endAngle);
+    final ey = cy + outerR * _fsin(endAngle);
+    path.cubicTo(
+      topOuter.dx + outerR * k * 0.5, topOuter.dy,
+      ex - outerR * k * 0.7,  ey - outerR * k * 0.5,
+      ex, ey,
+    );
+
+    final topInner = Offset(cx, cy - innerR);
+    final ix = cx + innerR * _fcos(endAngle);
+    final iy = cy + innerR * _fsin(endAngle);
+    path.lineTo(ix, iy);
+    path.cubicTo(
+      ix - innerR * k * 0.5, iy - innerR * k * 0.5,
+      topInner.dx + innerR * k * 0.5, topInner.dy,
+      topInner.dx, topInner.dy,
+    );
+    final isx = cx + innerR * _fcos(startAngle);
+    final isy = cy + innerR * _fsin(startAngle);
+    path.cubicTo(
+      topInner.dx - innerR * k * 0.5, topInner.dy,
+      isx + innerR * k * 0.7, isy - innerR * k * 0.5,
+      isx, isy,
+    );
+
+    path.close();
+    return path;
+  }
+
+  static double _fsin(double x) {
+    const pi = 3.14159265358979;
+    const twoPi = pi * 2;
+    x = x - twoPi * (x / twoPi).floorToDouble();
+    if (x > pi) { x -= twoPi; }
+    final x2 = x * x;
+    return x * (1.0 - x2 / 6.0 * (1.0 - x2 / 20.0 * (1.0 - x2 / 42.0)));
+  }
+
+  static double _fcos(double x) => _fsin(x + 1.5707963267948966);
+
+  Color _lighten(Color c, double amount) {
+    final hsl = HSLColor.fromColor(c);
+    return hsl.withLightness((hsl.lightness + amount).clamp(0.0, 1.0)).toColor();
+  }
+
+  Color _darken(Color c, double amount) {
+    final hsl = HSLColor.fromColor(c);
+    return hsl.withLightness((hsl.lightness - amount).clamp(0.0, 1.0)).toColor();
+  }
+
+  @override
+  bool shouldRepaint(_MapPinPainter old) =>
+      old.primary != primary || old.dark != dark;
 }
