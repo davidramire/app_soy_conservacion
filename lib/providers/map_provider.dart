@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../models/map_snapshot.dart';
+import '../providers/filter_provider.dart';
 import '../repositories/map_repository.dart';
 
 class MapProvider extends ChangeNotifier {
@@ -18,7 +19,10 @@ class MapProvider extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   DateTime? get lastSyncedAt => _lastSyncedAt;
 
-  Future<void> loadSnapshot({bool refresh = false}) async {
+  Future<void> loadSnapshot({
+    bool refresh = false,
+    DateRangeFilter? dateRange,
+  }) async {
     if (_isLoading) {
       return;
     }
@@ -28,7 +32,10 @@ class MapProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _snapshot = await repository.loadMapSnapshot(refresh: refresh);
+      _snapshot = await repository.loadMapSnapshot(
+        refresh: refresh,
+        dateRange: dateRange,
+      );
       _lastSyncedAt = DateTime.now();
     } catch (error) {
       _errorMessage = error.toString();
@@ -39,5 +46,6 @@ class MapProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> refresh() => loadSnapshot(refresh: true);
+  Future<void> refresh({DateRangeFilter? dateRange}) =>
+      loadSnapshot(refresh: true, dateRange: dateRange);
 }
