@@ -1257,12 +1257,12 @@ class _MainScreenState extends State<MainScreen>
                                   curve: Curves.easeOutCubic,
                                   margin: const EdgeInsets.symmetric(horizontal: 2),
                                   padding: EdgeInsets.only(
-                                    left: index == 0 ? 12 : 8,
-                                    right: index == navItems.length - 1 ? 12 : 8,
+                                    left: index == 0 ? 14 : 10,
+                                    right: index == navItems.length - 1 ? 14 : 10,
                                     top: 6,
                                     bottom: 6,
                                   ),
-                                  constraints: const BoxConstraints(minWidth: 60),
+                                  constraints: const BoxConstraints(minWidth: 64),
                                   decoration: BoxDecoration(
                                     color: isSelected 
                                       ? (_isDarkMode ? CupertinoColors.activeBlue.withValues(alpha: 0.28) : CupertinoColors.activeBlue.withValues(alpha: 0.15)) 
