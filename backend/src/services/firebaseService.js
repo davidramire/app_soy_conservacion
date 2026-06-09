@@ -8,15 +8,25 @@ const __dirname = path.dirname(__filename);
 
 // Buscar el archivo (intentamos con las dos extensiones por si acaso)
 let serviceAccount;
-try {
-  const keyPath = path.join(__dirname, '../../serviceAccountKey.json');
-  serviceAccount = JSON.parse(readFileSync(keyPath, 'utf-8'));
-} catch (e) {
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   try {
-    const keyPathFallback = path.join(__dirname, '../../serviceAccountKey.json.json');
-    serviceAccount = JSON.parse(readFileSync(keyPathFallback, 'utf-8'));
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
   } catch (err) {
-    console.error("Error al cargar serviceAccountKey:", err);
+    console.error("Error al parsear la variable FIREBASE_SERVICE_ACCOUNT:", err);
+  }
+}
+
+if (!serviceAccount) {
+  try {
+    const keyPath = path.join(__dirname, '../../serviceAccountKey.json');
+    serviceAccount = JSON.parse(readFileSync(keyPath, 'utf-8'));
+  } catch (e) {
+    try {
+      const keyPathFallback = path.join(__dirname, '../../serviceAccountKey.json.json');
+      serviceAccount = JSON.parse(readFileSync(keyPathFallback, 'utf-8'));
+    } catch (err) {
+      console.error("Error al cargar serviceAccountKey local (Esto es normal si estás usando la nube y no has configurado FIREBASE_SERVICE_ACCOUNT):", err.message);
+    }
   }
 }
 
