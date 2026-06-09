@@ -70,7 +70,7 @@ class FilterProvider extends ChangeNotifier {
   }
 
   List<int> get availableYears {
-    final minYear = (_minBound ?? DateTime.now()).year;
+    final minYear = 2010;
     final maxYear = (_maxBound ?? DateTime.now()).year;
     if (maxYear < minYear) {
       return [DateTime.now().year];
@@ -165,13 +165,8 @@ class FilterProvider extends ChangeNotifier {
   Future<void> reset() async {
     _isYearMode = false;
     _selectedYear = (_maxBound ?? DateTime.now()).year;
-    if (_minBound != null) {
-      _dateFrom = DateTime(_minBound!.year, _minBound!.month, _minBound!.day);
-      _dateTo = DateTime.now();
-    } else {
-      _dateFrom = null;
-      _dateTo = null;
-    }
+    _dateFrom = null;
+    _dateTo = null;
     _includeOdk = true;
     _includeInaturalist = true;
     await _persist();

@@ -34,8 +34,14 @@ analyticsRouter.get(
       inatBounds._max.fecha,
     ].filter(Boolean);
 
-    const minDate = dates.length > 0 ? new Date(Math.min(...dates.map((d) => d.getTime()))) : null;
+    let minDate = dates.length > 0 ? new Date(Math.min(...dates.map((d) => d.getTime()))) : null;
     const maxDate = dates.length > 0 ? new Date(Math.max(...dates.map((d) => d.getTime()))) : null;
+
+    // Forzar que la fecha mínima sea desde 2010-01-01
+    const forcedMinDate = new Date('2010-01-01T00:00:00.000Z');
+    if (!minDate || minDate > forcedMinDate) {
+      minDate = forcedMinDate;
+    }
 
     response.json({
       minDate: minDate?.toISOString() ?? null,
@@ -60,8 +66,6 @@ analyticsRouter.get(
       const rows = await prisma.observacion.groupBy({
         by: ['especieId'],
         where: {
-          latitud: { not: null },
-          longitud: { not: null },
           ...(dateFilter ? { fecha: dateFilter } : {}),
         },
         _count: { _all: true },
@@ -86,8 +90,6 @@ analyticsRouter.get(
     if (source === 'all' || source === 'inaturalist') {
       const rows = await prisma.inaturalistObservacion.findMany({
         where: {
-          latitud: { not: null },
-          longitud: { not: null },
           ...(dateFilter ? { fecha: dateFilter } : {}),
         },
         select: {
@@ -130,8 +132,6 @@ analyticsRouter.get(
       const rows = await prisma.observacion.groupBy({
         by: ['usuarioId'],
         where: {
-          latitud: { not: null },
-          longitud: { not: null },
           ...(dateFilter ? { fecha: dateFilter } : {}),
         },
         _count: { _all: true },
@@ -152,8 +152,6 @@ analyticsRouter.get(
       const rows = await prisma.inaturalistObservacion.groupBy({
         by: ['usuarioId'],
         where: {
-          latitud: { not: null },
-          longitud: { not: null },
           ...(dateFilter ? { fecha: dateFilter } : {}),
         },
         _count: { _all: true },
@@ -206,8 +204,6 @@ analyticsRouter.get(
       const rows = await prisma.observacion.groupBy({
         by: ['especieId'],
         where: {
-          latitud: { not: null },
-          longitud: { not: null },
           ...(dateFilter ? { fecha: dateFilter } : {}),
         },
         _count: { _all: true },
@@ -237,8 +233,6 @@ analyticsRouter.get(
       const rows = await prisma.inaturalistObservacion.groupBy({
         by: ['especieId'],
         where: {
-          latitud: { not: null },
-          longitud: { not: null },
           ...(dateFilter ? { fecha: dateFilter } : {}),
         },
         _count: { _all: true },

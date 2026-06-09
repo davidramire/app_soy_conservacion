@@ -13,6 +13,13 @@ class TaxonomicGroupStat {
       total: (json['total'] as num?)?.toInt() ?? 0,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'nombre': name,
+      'total': total,
+    };
+  }
 }
 
 class UserRankingItem {
@@ -26,6 +33,13 @@ class UserRankingItem {
       username: json['username']?.toString() ?? 'Anónimo',
       total: (json['total'] as num?)?.toInt() ?? 0,
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'username': username,
+      'total': total,
+    };
   }
 }
 
@@ -50,6 +64,15 @@ class SpeciesRankingItem {
       views: (json['views'] as num?)?.toInt() ?? 0,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'idEspecie': speciesId,
+      'scientificName': scientificName,
+      'taxonomicGroup': taxonomicGroup,
+      'views': views,
+    };
+  }
 }
 
 class DateBounds {
@@ -70,6 +93,13 @@ class DateBounds {
       return null;
     }
     return DateTime.tryParse(value.toString());
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'minDate': minDate?.toIso8601String(),
+      'maxDate': maxDate?.toIso8601String(),
+    };
   }
 }
 

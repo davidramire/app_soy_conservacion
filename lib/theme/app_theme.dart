@@ -12,6 +12,8 @@ class AppTheme {
           brightness: Brightness.light,
         ),
         scaffoldBackgroundColor: Colors.white,
+        splashColor: _seed.withOpacity(0.1),
+        highlightColor: _seed.withOpacity(0.05),
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.white,
           foregroundColor: Colors.black,
@@ -21,6 +23,16 @@ class AppTheme {
           backgroundColor: Colors.white,
           selectedItemColor: Colors.blueAccent,
           unselectedItemColor: Colors.black54,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            splashFactory: InkRipple.splashFactory,
+          ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(
+            splashFactory: InkRipple.splashFactory,
+          ),
         ),
       );
 
@@ -34,6 +46,8 @@ class AppTheme {
           surface: const Color(0xFF171717),
         ),
         scaffoldBackgroundColor: const Color(0xFF121212),
+        splashColor: _seed.withOpacity(0.15),
+        highlightColor: _seed.withOpacity(0.1),
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFF171717),
           foregroundColor: Colors.white,
@@ -43,6 +57,16 @@ class AppTheme {
           backgroundColor: Color(0xFF171717),
           selectedItemColor: Colors.blueAccent,
           unselectedItemColor: Colors.white54,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            splashFactory: InkRipple.splashFactory,
+          ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(
+            splashFactory: InkRipple.splashFactory,
+          ),
         ),
       );
 
