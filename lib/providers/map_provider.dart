@@ -32,14 +32,21 @@ class MapProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _snapshot = await repository.loadMapSnapshot(
+      final fetchFuture = repository.loadMapSnapshot(
         refresh: refresh,
         dateRange: dateRange,
       );
+      
+      // Artificial delay to ensure the loading modal is visible and prevents flashing
+      final results = await Future.wait([
+        fetchFuture,
+        Future.delayed(const Duration(milliseconds: 1200)),
+      ]);
+      
+      _snapshot = results[0] as MapSnapshot;
       _lastSyncedAt = DateTime.now();
     } catch (error) {
       _errorMessage = error.toString();
-      _snapshot = await repository.loadCachedSnapshot();
     } finally {
       _isLoading = false;
       notifyListeners();

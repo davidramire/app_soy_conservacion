@@ -19,68 +19,48 @@ class MapRepository {
     bool refresh = false,
     DateRangeFilter? dateRange,
   }) async {
-    if (!refresh && dateRange == null) {
-      final cached = await loadCachedSnapshot();
-      if (cached != null && cached.markers.isNotEmpty) {
-        return cached;
+    final cacheKey = 'map_snapshot_${dateRange?.from.millisecondsSinceEpoch}_${dateRange?.to.millisecondsSinceEpoch}';
+
+    if (!refresh) {
+      final cachedJson = await cacheService.readJson(cacheKey);
+      if (cachedJson != null) {
+        return MapSnapshot.fromJson(cachedJson);
       }
     }
 
     try {
-      final snapshot = await service.fetchMapSnapshot(
+      final fetchFuture = service.fetchMapSnapshot(
         queryParameters: dateRange?.toQueryParams(),
       );
-      await _saveSnapshot(snapshot);
+      final snapshot = refresh ? await fetchFuture : await fetchFuture.timeout(const Duration(seconds: 2));
+      await cacheService.saveJson(cacheKey, snapshot.toJson());
       return snapshot;
     } catch (_) {
-      final observations = await observationsRepository.loadObservations(
-        refresh: refresh,
-      );
-      final derivedSnapshot = MapSnapshot.fromObservations(observations);
-      await _saveSnapshot(derivedSnapshot);
-      return derivedSnapshot;
+      final cachedJson = await cacheService.readJson(cacheKey);
+      if (cachedJson != null) {
+        return MapSnapshot.fromJson(cachedJson);
+      }
+      
+      final baseCachedJson = await cacheService.readJson('map_snapshot_null_null');
+      if (baseCachedJson != null) {
+        final baseSnapshot = MapSnapshot.fromJson(baseCachedJson);
+        var filteredMarkers = baseSnapshot.markers;
+        if (dateRange != null) {
+          filteredMarkers = filteredMarkers.where((m) {
+            if (m.observedAt == null) return false;
+            final isAfter = m.observedAt!.isAfter(dateRange.from) || m.observedAt!.isAtSameMomentAs(dateRange.from);
+            final isBefore = m.observedAt!.isBefore(dateRange.to) || m.observedAt!.isAtSameMomentAs(dateRange.to);
+            return isAfter && isBefore;
+          }).toList();
+        }
+        return MapSnapshot(
+          markers: filteredMarkers,
+          center: baseSnapshot.center,
+          zoom: baseSnapshot.zoom,
+        );
+      }
+      
+      return const MapSnapshot(markers: []);
     }
   }
-
-  Future<void> _saveSnapshot(MapSnapshot snapshot) async {
-    await cacheService.saveJson(_cacheKey, {
-      'markers': snapshot.markers
-          .map(
-            (marker) => {
-              'id': marker.id,
-              'latitude': marker.position.latitude,
-              'longitude': marker.position.longitude,
-              'title': marker.title,
-              'subtitle': marker.subtitle,
-              'imageUrl': marker.imageUrl,
-              'sourceUrl': marker.sourceUrl,
-              'sourceType': marker.sourceType,
-              'groupName': marker.groupName,
-              'speciesId': marker.speciesId,
-              'observedAt': marker.observedAt?.toIso8601String(),
-            },
-          )
-          .toList(),
-      'center': snapshot.center == null
-          ? null
-          : {
-              'latitude': snapshot.center!.latitude,
-              'longitude': snapshot.center!.longitude,
-            },
-      'zoom': snapshot.zoom,
-    });
-  }
-
-  Future<MapSnapshot?> loadCachedSnapshot() async {
-    final cachedValue = await cacheService.readJson(_cacheKey);
-    if (cachedValue is Map<String, dynamic>) {
-      return MapSnapshot.fromJson(cachedValue);
-    }
-    if (cachedValue is Map) {
-      return MapSnapshot.fromJson(Map<String, dynamic>.from(cachedValue));
-    }
-    return null;
-  }
-
-  static const String _cacheKey = 'map_snapshot_cache';
 }

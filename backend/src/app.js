@@ -9,6 +9,7 @@ import { mapRouter } from './routes/map.js';
 import { analyticsRouter } from './routes/analytics.js';
 import { usersRouter } from './routes/users.js';
 import { authRouter } from './routes/auth.js';
+import { notificationsRouter } from './routes/notifications.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
 
 export const app = express();
@@ -45,6 +46,7 @@ app.use('/map', mapRouter);
 app.use('/analytics', analyticsRouter);
 app.use('/users', usersRouter);
 app.use('/auth', authRouter);
+app.use('/notifications', notificationsRouter);
 
 app.use(notFound);
 app.use(errorHandler);

@@ -31,7 +31,7 @@ class AppEnvironment {
       type: environmentType,
       developmentBaseUrl: _parseUri(
         env['API_BASE_URL_DEV'],
-        fallback: 'http://192.168.1.10:3000',
+        fallback: 'http://192.168.100.12:3000',
       ),
       productionBaseUrl: _parseUri(
         env['API_BASE_URL_PROD'],

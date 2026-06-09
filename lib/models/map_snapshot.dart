@@ -48,6 +48,20 @@ class MapMarkerData {
       observedAt: observation.observedAt,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+        'title': title,
+        'subtitle': subtitle,
+        'imageUrl': imageUrl,
+        'sourceUrl': sourceUrl,
+        'sourceType': sourceType,
+        'groupName': groupName,
+        'speciesId': speciesId,
+        'observedAt': observedAt?.toIso8601String(),
+      };
 }
 
 class MapSnapshot {
@@ -137,4 +151,12 @@ class MapSnapshot {
 
     return const MapSnapshot(markers: []);
   }
+
+  Map<String, dynamic> toJson() => {
+        'markers': markers.map((m) => m.toJson()).toList(),
+        'center': center != null
+            ? {'latitude': center!.latitude, 'longitude': center!.longitude}
+            : null,
+        'zoom': zoom,
+      };
 }
