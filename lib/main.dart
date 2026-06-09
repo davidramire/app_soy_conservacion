@@ -1257,12 +1257,12 @@ class _MainScreenState extends State<MainScreen>
                                   curve: Curves.easeOutCubic,
                                   margin: const EdgeInsets.symmetric(horizontal: 2),
                                   padding: EdgeInsets.only(
-                                    left: index == 0 ? 14 : (index == navItems.length - 1 ? 12 : 10),
-                                    right: index == navItems.length - 1 ? 13 : 10,
+                                    left: index == 0 ? 12 : 8,
+                                    right: index == navItems.length - 1 ? 12 : 8,
                                     top: 6,
                                     bottom: 6,
                                   ),
-                                  constraints: const BoxConstraints(minWidth: 64),
+                                  constraints: const BoxConstraints(minWidth: 60),
                                   decoration: BoxDecoration(
                                     color: isSelected 
                                       ? (_isDarkMode ? CupertinoColors.activeBlue.withValues(alpha: 0.28) : CupertinoColors.activeBlue.withValues(alpha: 0.15)) 
@@ -1285,9 +1285,9 @@ class _MainScreenState extends State<MainScreen>
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
                                           color: isSelected ? activeColor : inactiveColor,
-                                          fontSize: 9.5,
+                                          fontSize: 9.0,
                                           fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
-                                          letterSpacing: -0.2,
+                                          letterSpacing: -0.3,
                                         ),
                                       ),
                                     ],
