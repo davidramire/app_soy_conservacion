@@ -1209,6 +1209,7 @@ class _MainScreenState extends State<MainScreen>
               child: BackdropFilter(
                 filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                 child: Container(
+                  height: 64,
                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(40),
@@ -1225,72 +1226,70 @@ class _MainScreenState extends State<MainScreen>
                     ),
                   ),
                   child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.max,
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: List.generate(navItems.length, (index) {
                               final item = navItems[index];
                               final isSelected = _selectedBottomIndex == index;
                               final activeColor = _isDarkMode ? const Color(0xFF0A84FF) : const Color(0xFF007AFF);
                               final inactiveColor = _isDarkMode ? Colors.white.withValues(alpha: 0.8) : const Color(0xFF8E8E93);
-                              return GestureDetector(
-                                onTap: () {
-                                  HapticFeedback.selectionClick();
-                                  setState(() {
-                                    _selectedBottomIndex = index;
-                                    if (index == 0) {
-                                      _taxonomyFocus = 'fauna';
-                                      _activeTaxonomyGroup = null;
-                                    } else if (index == 1) {
-                                      _taxonomyFocus = 'flora';
-                                      _activeTaxonomyGroup = null;
+                              return Expanded(
+                                child: GestureDetector(
+                                  onTap: () {
+                                    HapticFeedback.selectionClick();
+                                    setState(() {
+                                      _selectedBottomIndex = index;
+                                      if (index == 0) {
+                                        _taxonomyFocus = 'fauna';
+                                        _activeTaxonomyGroup = null;
+                                      } else if (index == 1) {
+                                        _taxonomyFocus = 'flora';
+                                        _activeTaxonomyGroup = null;
+                                      }
+                                    });
+                                    if (index == 0 || index == 1) {
+                                      Future.microtask(() => _showTaxonomyPanel(context));
+                                    } else if (index == 2) {
+                                      Future.microtask(() => _showDateFilterPanel(context));
                                     }
-                                  });
-                                  if (index == 0 || index == 1) {
-                                    Future.microtask(() => _showTaxonomyPanel(context));
-                                  } else if (index == 2) {
-                                    Future.microtask(() => _showDateFilterPanel(context));
-                                  }
-                                },
-                                behavior: HitTestBehavior.opaque,
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 300),
-                                  curve: Curves.easeOutCubic,
-                                  margin: const EdgeInsets.symmetric(horizontal: 2),
-                                  padding: EdgeInsets.only(
-                                    left: index == 0 ? 14 : 10,
-                                    right: index == navItems.length - 1 ? 14 : 10,
-                                    top: 6,
-                                    bottom: 6,
-                                  ),
-                                  constraints: const BoxConstraints(minWidth: 64),
-                                  decoration: BoxDecoration(
-                                    color: isSelected 
-                                      ? (_isDarkMode ? CupertinoColors.activeBlue.withValues(alpha: 0.28) : CupertinoColors.activeBlue.withValues(alpha: 0.15)) 
-                                      : Colors.transparent,
-                                    borderRadius: BorderRadius.circular(30),
-                                  ),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      IconTheme(
-                                        data: IconThemeData(
-                                          color: isSelected ? activeColor : inactiveColor,
-                                          size: 22,
+                                  },
+                                  behavior: HitTestBehavior.opaque,
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 300),
+                                    curve: Curves.easeOutCubic,
+                                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                                    padding: const EdgeInsets.symmetric(vertical: 4),
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      color: isSelected 
+                                        ? (_isDarkMode ? CupertinoColors.activeBlue.withValues(alpha: 0.28) : CupertinoColors.activeBlue.withValues(alpha: 0.15)) 
+                                        : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(30),
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        IconTheme(
+                                          data: IconThemeData(
+                                            color: isSelected ? activeColor : inactiveColor,
+                                            size: 26,
+                                          ),
+                                          child: isSelected ? item.activeIcon : item.icon,
                                         ),
-                                        child: isSelected ? item.activeIcon : item.icon,
-                                      ),
-                                      Text(
-                                        item.label ?? '',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          color: isSelected ? activeColor : inactiveColor,
-                                          fontSize: 9.0,
-                                          fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
-                                          letterSpacing: -0.3,
+                                        Text(
+                                          item.label ?? '',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            color: isSelected ? activeColor : inactiveColor,
+                                            fontSize: 10.5,
+                                            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+                                            letterSpacing: -0.3,
+                                          ),
                                         ),
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
                               );
@@ -1333,8 +1332,8 @@ class _MainScreenState extends State<MainScreen>
                     });
                   },
                   child: Container(
-                    width: 60,
-                    height: 60,
+                    width: 64,
+                    height: 64,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
@@ -1361,7 +1360,7 @@ class _MainScreenState extends State<MainScreen>
                           _isSearchActive ? LucideIcons.x : LucideIcons.search,
                           key: ValueKey(_isSearchActive),
                           color: _isDarkMode ? Colors.white : Colors.black87,
-                          size: 26,
+                          size: 28,
                         ),
                       ),
                     ),
